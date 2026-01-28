@@ -1,0 +1,22 @@
+@author "Dustin Pilgrim"
+@description "Unified Void package manager config (xbps + void-packages)"
+
+environment "user"
+debug false
+
+xbps:
+  sudo true
+  install "xbps-install"
+  remove "xbps-remove"
+  query "xbps-query"
+end
+
+void_packages:
+  # Must contain ./xbps-src
+  path "$env.HOME/void-packages"
+
+  # relative to void-packages root
+  local_repo "hostdir/binpkgs"
+  use_nonfree true
+end
+
