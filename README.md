@@ -1,14 +1,15 @@
 # vx
-
->[!WARNING]
->----------------------------
->vx is actively under development and NOT yet stable.
->Expect breaking CLI changes, rough edges, and bugs.
+> [!WARNING]
 >
->If you try it:
->- read output carefully
->- pin versions if you script against it
->- report issues with command + output + Void version
+>  Urgent info that needs immediate user attention to avoid problems.
+> ----------------------------
+> vx is actively under development and NOT yet stable.
+> Expect breaking CLI changes, rough edges, and bugs.
+>
+> If you try it:
+> - read output carefully
+> - pin versions if you script against it
+> - report issues with command + output + Void version
 
 ---
 
