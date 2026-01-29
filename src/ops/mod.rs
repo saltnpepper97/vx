@@ -32,6 +32,9 @@ pub fn dispatch(log: &Log, cli: Cli, cfg: Option<Config>) -> ExitCode {
             force,
             yes,
         } => {
+            // ------------------------------------------------------------
+            // vx up (system only)
+            // ------------------------------------------------------------
             if !all {
                 if dry_run {
                     let sys_plan = match xbps::plan_system_updates(log, cfg.as_ref()) {
@@ -57,6 +60,10 @@ pub fn dispatch(log: &Log, cli: Cli, cfg: Option<Config>) -> ExitCode {
                 return xbps::up_with_yes(log, cfg.as_ref(), yes);
             }
 
+            // ------------------------------------------------------------
+            // vx up -a (system + src)
+            // Always compute BOTH plans right now.
+            // ------------------------------------------------------------
             let sys_plan = match xbps::plan_system_updates(log, cfg.as_ref()) {
                 Ok(v) => v,
                 Err(e) => {
@@ -79,8 +86,10 @@ pub fn dispatch(log: &Log, cli: Cli, cfg: Option<Config>) -> ExitCode {
                 }
             };
 
+            // Show summary (even if empty, so user sees both checks happened)
+            srcops::print_up_all_summary(log, &sys_plan, &src_plan);
+
             if dry_run {
-                srcops::print_up_all_summary(log, &sys_plan, &src_plan);
                 return ExitCode::SUCCESS;
             }
 
@@ -89,8 +98,6 @@ pub fn dispatch(log: &Log, cli: Cli, cfg: Option<Config>) -> ExitCode {
                 return ExitCode::SUCCESS;
             }
 
-            srcops::print_up_all_summary(log, &sys_plan, &src_plan);
-
             if !yes {
                 if !srcops::confirm_once("Proceed?") {
                     log.info("aborted.");
@@ -98,6 +105,7 @@ pub fn dispatch(log: &Log, cli: Cli, cfg: Option<Config>) -> ExitCode {
                 }
             }
 
+            // Apply system updates first, then src.
             if !sys_plan.is_empty() {
                 let c = xbps::up_with_yes(log, cfg.as_ref(), true);
                 if c != ExitCode::SUCCESS {

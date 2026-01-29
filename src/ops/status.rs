@@ -5,7 +5,7 @@ use crate::{cli::Cli, config::Config, managed, paths::user_config_path};
 use std::{env, path::PathBuf, process::ExitCode};
 
 pub fn run_status(_log: &crate::log::Log, cli: &Cli, cfg: Option<&Config>) -> ExitCode {
-    println!("status (v{})", env!("CARGO_PKG_VERSION"));
+    println!("version: {}", env!("CARGO_PKG_VERSION"));
 
     // ------------------------------------------------------------
     // Config
@@ -25,15 +25,12 @@ pub fn run_status(_log: &crate::log::Log, cli: &Cli, cfg: Option<&Config>) -> Ex
     }
 
     // ------------------------------------------------------------
-    // xbps tools
+    // base
     // ------------------------------------------------------------
     if let Some(c) = cfg {
-        println!(
-            "xbps: sudo={} install={} remove={} query={}",
-            c.xbps_sudo, c.xbps_install, c.xbps_remove, c.xbps_query
-        );
+        println!("debug: {}", c.debug);
     } else {
-        println!("xbps: sudo=true install=xbps-install remove=xbps-remove query=xbps-query");
+        println!("debug: false");
     }
 
     // ------------------------------------------------------------
@@ -85,12 +82,14 @@ pub fn run_status(_log: &crate::log::Log, cli: &Cli, cfg: Option<&Config>) -> Ex
 }
 
 fn resolve_voidpkgs_for_status(cli: &Cli, cfg: Option<&Config>) -> (Option<PathBuf>, &'static str) {
+    // 1) CLI override
     if let Some(p) = &cli.voidpkgs {
         if !p.as_os_str().is_empty() {
             return (Some(p.clone()), "cli");
         }
     }
 
+    // 2) env var
     if let Ok(v) = env::var("VX_VOIDPKGS") {
         let p = PathBuf::from(v);
         if !p.as_os_str().is_empty() {
@@ -98,9 +97,12 @@ fn resolve_voidpkgs_for_status(cli: &Cli, cfg: Option<&Config>) -> (Option<PathB
         }
     }
 
+    // 3) config
     if let Some(c) = cfg {
-        if !c.void_packages_path.as_os_str().is_empty() {
-            return (Some(c.void_packages_path.clone()), "config");
+        if let Some(p) = &c.void_packages_path {
+            if !p.as_os_str().is_empty() {
+                return (Some(p.clone()), "config");
+            }
         }
     }
 

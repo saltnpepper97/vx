@@ -1,22 +1,21 @@
 @author "Dustin Pilgrim"
 @description "Unified Void package manager config (xbps + void-packages)"
 
-environment "user"
-debug false
-
-xbps:
-  sudo true
-  install "xbps-install"
-  remove "xbps-remove"
-  query "xbps-query"
+base:
+  debug: false
 end
 
+# Optional. Only needed if you want to use `vx src ...` and don't want to rely on:
+#   - --voidpkgs /path/to/void-packages
+#   or
+#   - VX_VOIDPKGS=/path/to/void-packages
 void_packages:
-  # Must contain ./xbps-src
   path "$env.HOME/void-packages"
 
   # relative to void-packages root
   local_repo "hostdir/binpkgs"
+
+  # if true, and a `nonfree/` repo exists under local_repo, VX will add it as -R too
   use_nonfree true
 end
 

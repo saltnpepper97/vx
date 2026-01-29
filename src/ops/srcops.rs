@@ -286,6 +286,7 @@ fn resolve_voidpkgs(
         use_nonfree = c.use_nonfree;
     }
 
+    // 1) CLI override
     if let Some(p) = voidpkgs_override {
         return Ok(SrcResolved {
             voidpkgs: p,
@@ -294,6 +295,7 @@ fn resolve_voidpkgs(
         });
     }
 
+    // 2) env var
     if let Ok(v) = env::var("VX_VOIDPKGS") {
         let p = PathBuf::from(v);
         if !p.as_os_str().is_empty() {
@@ -305,13 +307,16 @@ fn resolve_voidpkgs(
         }
     }
 
+    // 3) config (now Option<PathBuf>)
     if let Some(c) = cfg {
-        if !c.void_packages_path.as_os_str().is_empty() {
-            return Ok(SrcResolved {
-                voidpkgs: c.void_packages_path.clone(),
-                local_repo_rel,
-                use_nonfree,
-            });
+        if let Some(p) = &c.void_packages_path {
+            if !p.as_os_str().is_empty() {
+                return Ok(SrcResolved {
+                    voidpkgs: p.clone(),
+                    local_repo_rel,
+                    use_nonfree,
+                });
+            }
         }
     }
 

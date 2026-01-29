@@ -11,61 +11,54 @@ pub struct SysUpdate {
     pub to: String,
 }
 
-pub fn search(log: &Log, cfg: Option<&Config>, installed: bool, term: &[String]) -> ExitCode {
+pub fn search(log: &Log, _cfg: Option<&Config>, installed: bool, term: &[String]) -> ExitCode {
     if term.is_empty() {
         log.error("usage: vx search <term>");
         return ExitCode::from(2);
     }
 
-    let (_sudo, _install, query) = xbps_tools(cfg);
-
     let needle = term.join(" ");
     let opt = if installed { "-s" } else { "-Rs" };
 
-    run_query_cmd(log, &query, &[opt, &needle])
+    run_query_cmd(log, "xbps-query", &[opt, &needle])
 }
 
-pub fn info(log: &Log, cfg: Option<&Config>, pkg: &str) -> ExitCode {
+pub fn info(log: &Log, _cfg: Option<&Config>, pkg: &str) -> ExitCode {
     if pkg.trim().is_empty() {
         log.error("usage: vx info <pkg>");
         return ExitCode::from(2);
     }
 
-    let (_sudo, _install, query) = xbps_tools(cfg);
-    run_query_cmd(log, &query, &["-R", pkg])
+    run_query_cmd(log, "xbps-query", &["-R", pkg])
 }
 
-pub fn files(log: &Log, cfg: Option<&Config>, pkg: &str) -> ExitCode {
+pub fn files(log: &Log, _cfg: Option<&Config>, pkg: &str) -> ExitCode {
     if pkg.trim().is_empty() {
         log.error("usage: vx files <pkg>");
         return ExitCode::from(2);
     }
 
-    let (_sudo, _install, query) = xbps_tools(cfg);
-    run_query_cmd(log, &query, &["-f", pkg])
+    run_query_cmd(log, "xbps-query", &["-f", pkg])
 }
 
-pub fn provides(log: &Log, cfg: Option<&Config>, path: &str) -> ExitCode {
+pub fn provides(log: &Log, _cfg: Option<&Config>, path: &str) -> ExitCode {
     if path.trim().is_empty() {
         log.error("usage: vx provides <path>");
         return ExitCode::from(2);
     }
 
-    let (_sudo, _install, query) = xbps_tools(cfg);
-    run_query_cmd(log, &query, &["-o", path])
+    run_query_cmd(log, "xbps-query", &["-o", path])
 }
 
-pub fn add(log: &Log, cfg: Option<&Config>, yes: bool, pkgs: &[String]) -> ExitCode {
+pub fn add(log: &Log, _cfg: Option<&Config>, yes: bool, pkgs: &[String]) -> ExitCode {
     if pkgs.is_empty() {
         log.error("usage: vx add <pkg> [pkg...]");
         return ExitCode::from(2);
     }
 
-    let (sudo, install, query) = xbps_tools(cfg);
-
     let mut to_install = Vec::new();
     for p in pkgs {
-        match is_installed(&query, p) {
+        match is_installed("xbps-query", p) {
             Ok(true) => log.warn(format!("package '{}' already installed.", p)),
             Ok(false) => to_install.push(p.clone()),
             Err(e) => {
@@ -80,23 +73,18 @@ pub fn add(log: &Log, cfg: Option<&Config>, yes: bool, pkgs: &[String]) -> ExitC
         return ExitCode::SUCCESS;
     }
 
-    run_cmd(log, sudo, &install, &[], &to_install, yes)
+    run_install_cmd(log, &["-S"], &to_install, yes)
 }
 
-pub fn rm(log: &Log, cfg: Option<&Config>, yes: bool, pkgs: &[String]) -> ExitCode {
+pub fn rm(log: &Log, _cfg: Option<&Config>, yes: bool, pkgs: &[String]) -> ExitCode {
     if pkgs.is_empty() {
         log.error("usage: vx rm <pkg> [pkg...]");
         return ExitCode::from(2);
     }
 
-    let (sudo, _install, query) = xbps_tools(cfg);
-    let remove = cfg
-        .map(|c| c.xbps_remove.clone())
-        .unwrap_or_else(|| "xbps-remove".to_string());
-
     let mut to_remove = Vec::new();
     for p in pkgs {
-        match is_installed(&query, p) {
+        match is_installed("xbps-query", p) {
             Ok(true) => to_remove.push(p.clone()),
             Ok(false) => log.warn(format!("package '{}' not installed.", p)),
             Err(e) => {
@@ -111,41 +99,46 @@ pub fn rm(log: &Log, cfg: Option<&Config>, yes: bool, pkgs: &[String]) -> ExitCo
         return ExitCode::SUCCESS;
     }
 
-    run_cmd(log, sudo, &remove, &[], &to_remove, yes)
+    run_remove_cmd(log, &[], &to_remove, yes)
 }
 
-pub fn up_with_yes(log: &Log, cfg: Option<&Config>, yes: bool) -> ExitCode {
-    let (sudo, install, _query) = xbps_tools(cfg);
-    run_cmd(log, sudo, &install, &["-Su"], &[], yes)
+pub fn up_with_yes(log: &Log, _cfg: Option<&Config>, yes: bool) -> ExitCode {
+    // xbps-install -Su
+    run_install_cmd(log, &["-Su"], &[], yes)
 }
 
 /// Dry-run system update and parse versions.
-/// Uses: xbps-install -Suvn
-pub fn plan_system_updates(log: &Log, cfg: Option<&Config>) -> Result<Vec<SysUpdate>, String> {
-    let (sudo, install, _query) = xbps_tools(cfg);
-
-    let mut cmd = if sudo {
-        let mut c = Command::new("sudo");
-        c.arg(&install);
-        c
-    } else {
-        Command::new(&install)
-    };
-
-    cmd.args(["-Suvn"]);
-    cmd.stdin(Stdio::null());
+/// Uses: sudo xbps-install -Sun
+///
+/// IMPORTANT: xbps-install dry-run output format is columnar:
+/// <pkgver> <action> <arch> <repository> <installedsize> <downloadsize>
+/// So we must parse that format and query installed pkgver for "from".
+pub fn plan_system_updates(log: &Log, _cfg: Option<&Config>) -> Result<Vec<SysUpdate>, String> {
+    let mut cmd = Command::new("sudo");
+    cmd.arg("xbps-install");
+    cmd.args(["-Sun"]);
+    // allow sudo password prompt if needed
+    cmd.stdin(Stdio::inherit());
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::piped());
 
-    log.exec(format!(
-        "{}{} -Suvn",
-        if sudo { "sudo " } else { "" },
-        install
-    ));
+    log.exec("sudo xbps-install -Sun".to_string());
 
     let out = cmd
         .output()
-        .map_err(|e| format!("failed to run {install} -Suvn: {e}"))?;
+        .map_err(|e| format!("failed to run xbps-install -Sun: {e}"))?;
+
+    // If sudo failed, we MUST surface it; otherwise vx up -a will lie.
+    if !out.status.success() {
+        let err = String::from_utf8_lossy(&out.stderr).trim().to_string();
+        if err.is_empty() {
+            return Err(format!(
+                "xbps-install -Sun failed (exit={})",
+                out.status.code().unwrap_or(1)
+            ));
+        }
+        return Err(format!("xbps-install -Sun failed: {err}"));
+    }
 
     let text = format!(
         "{}\n{}",
@@ -153,21 +146,7 @@ pub fn plan_system_updates(log: &Log, cfg: Option<&Config>) -> Result<Vec<SysUpd
         String::from_utf8_lossy(&out.stderr)
     );
 
-    Ok(parse_xbps_dry_run(&text))
-}
-
-fn xbps_tools(cfg: Option<&Config>) -> (bool, String, String) {
-    let sudo = cfg.map(|c| c.xbps_sudo).unwrap_or(true);
-
-    let install = cfg
-        .map(|c| c.xbps_install.clone())
-        .unwrap_or_else(|| "xbps-install".to_string());
-
-    let query = cfg
-        .map(|c| c.xbps_query.clone())
-        .unwrap_or_else(|| "xbps-query".to_string());
-
-    (sudo, install, query)
+    parse_xbps_sun_plan(&text)
 }
 
 fn is_installed(xbps_query: &str, pkg: &str) -> Result<bool, String> {
@@ -182,6 +161,29 @@ fn is_installed(xbps_query: &str, pkg: &str) -> Result<bool, String> {
         .map_err(|e| format!("failed to run {xbps_query}: {e}"))?;
 
     Ok(status.success())
+}
+
+fn installed_pkgver(pkg: &str) -> Result<Option<String>, String> {
+    let out = Command::new("xbps-query")
+        .arg("-p")
+        .arg("pkgver")
+        .arg(pkg)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .output()
+        .map_err(|e| format!("failed to run xbps-query: {e}"))?;
+
+    if !out.status.success() {
+        return Ok(None);
+    }
+
+    let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    if s.is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(s))
+    }
 }
 
 fn run_query_cmd(log: &Log, tool: &str, args: &[&str]) -> ExitCode {
@@ -210,15 +212,9 @@ fn run_query_cmd(log: &Log, tool: &str, args: &[&str]) -> ExitCode {
     }
 }
 
-fn run_cmd(log: &Log, sudo: bool, tool: &str, opts: &[&str], args: &[String], yes: bool) -> ExitCode {
-    let mut cmd = if sudo {
-        let mut c = Command::new("sudo");
-        c.arg(tool);
-        c
-    } else {
-        Command::new(tool)
-    };
-
+fn run_install_cmd(log: &Log, opts: &[&str], args: &[String], yes: bool) -> ExitCode {
+    let mut cmd = Command::new("sudo");
+    cmd.arg("xbps-install");
     cmd.args(opts);
     if yes {
         cmd.arg("-y");
@@ -226,11 +222,7 @@ fn run_cmd(log: &Log, sudo: bool, tool: &str, opts: &[&str], args: &[String], ye
     cmd.args(args);
 
     if log.verbose && !log.quiet {
-        let mut s = String::new();
-        if sudo {
-            s.push_str("sudo ");
-        }
-        s.push_str(tool);
+        let mut s = String::from("sudo xbps-install");
         for o in opts {
             s.push(' ');
             s.push_str(o);
@@ -252,53 +244,107 @@ fn run_cmd(log: &Log, sudo: bool, tool: &str, opts: &[&str], args: &[String], ye
     match cmd.status() {
         Ok(s) => ExitCode::from(s.code().unwrap_or(1) as u8),
         Err(e) => {
-            log.error(format!("failed to run {tool}: {e}"));
+            log.error(format!("failed to run xbps-install: {e}"));
             ExitCode::from(1)
         }
     }
 }
 
-fn parse_xbps_dry_run(text: &str) -> Vec<SysUpdate> {
-    let mut out = Vec::new();
+fn run_remove_cmd(log: &Log, opts: &[&str], args: &[String], yes: bool) -> ExitCode {
+    let mut cmd = Command::new("sudo");
+    cmd.arg("xbps-remove");
+    cmd.args(opts);
+    if yes {
+        cmd.arg("-y");
+    }
+    cmd.args(args);
 
-    for line in text.lines() {
-        let line = line.trim();
+    if log.verbose && !log.quiet {
+        let mut s = String::from("sudo xbps-remove");
+        for o in opts {
+            s.push(' ');
+            s.push_str(o);
+        }
+        if yes {
+            s.push_str(" -y");
+        }
+        for a in args {
+            s.push(' ');
+            s.push_str(a);
+        }
+        log.exec(s);
+    }
+
+    cmd.stdin(Stdio::inherit());
+    cmd.stdout(Stdio::inherit());
+    cmd.stderr(Stdio::inherit());
+
+    match cmd.status() {
+        Ok(s) => ExitCode::from(s.code().unwrap_or(1) as u8),
+        Err(e) => {
+            log.error(format!("failed to run xbps-remove: {e}"));
+            ExitCode::from(1)
+        }
+    }
+}
+
+/// Parse `xbps-install -Sun` output lines:
+///   <pkgver> <action> <arch> <repo> <installedsize> <downloadsize>
+/// We return SysUpdate entries with:
+///   name = pkgname
+///   from = installed pkgver (or "<not installed>")
+///   to   = pkgver (candidate)
+fn parse_xbps_sun_plan(text: &str) -> Result<Vec<SysUpdate>, String> {
+    let mut out: Vec<SysUpdate> = Vec::new();
+
+    for raw in text.lines() {
+        let line = raw.trim();
         if line.is_empty() {
             continue;
         }
 
-        if let Some((a, b)) = line.split_once("->") {
-            let mut lhs = a.trim();
-            let mut rhs = b.trim();
-
-            lhs = lhs.trim_start_matches(|c: char| c == '*' || c == '-' || c.is_whitespace());
-            rhs = rhs.trim_start_matches(|c: char| c == '*' || c == '-' || c.is_whitespace());
-
-            if lhs.is_empty() || rhs.is_empty() {
-                continue;
-            }
-
-            let name = pkgname_from_pkgver(lhs).unwrap_or_else(|| "<pkg>".to_string());
-            out.push(SysUpdate {
-                name,
-                from: lhs.to_string(),
-                to: rhs.to_string(),
-            });
+        // ignore common non-plan chatter
+        if line.starts_with("=>") || line.starts_with("[") || line.starts_with("xbps-install:") {
             continue;
         }
 
         let cols: Vec<&str> = line.split_whitespace().collect();
-        if cols.len() >= 4 && cols[1] == "update" {
-            out.push(SysUpdate {
-                name: cols[0].to_string(),
-                from: cols[2].to_string(),
-                to: cols[3].to_string(),
-            });
+        if cols.len() < 4 {
             continue;
         }
+
+        let pkgver = cols[0];
+        let action = cols[1];
+
+        // Actions we care about in an "update plan"
+        let interesting = matches!(action, "update" | "install" | "reinstall" | "downgrade");
+        if !interesting {
+            continue;
+        }
+
+        let name = match pkgname_from_pkgver(pkgver) {
+            Some(n) => n,
+            None => continue,
+        };
+
+        let from = match installed_pkgver(&name) {
+            Ok(Some(v)) => v,
+            Ok(None) => "<not installed>".to_string(),
+            Err(e) => return Err(e),
+        };
+
+        out.push(SysUpdate {
+            name,
+            from,
+            to: pkgver.to_string(),
+        });
     }
 
-    out
+    // de-dupe by name (keep the last occurrence)
+    out.sort_by(|a, b| a.name.cmp(&b.name));
+    out.dedup_by(|a, b| a.name == b.name);
+
+    Ok(out)
 }
 
 fn pkgname_from_pkgver(pkgver: &str) -> Option<String> {
