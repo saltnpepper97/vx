@@ -10,7 +10,7 @@ use std::{
     process::{Command, ExitCode, Stdio},
 };
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SrcUpdate {
     pub name: String,
     pub installed: Option<String>,
@@ -37,6 +37,18 @@ pub fn dispatch_src(
             return ExitCode::from(2);
         }
     };
+
+    // If we don't sync void-packages, we can never discover new upstream template versions.
+    // Sync before operations that depend on "latest templates" for planning/building updates.
+    let should_sync = matches!(&cmd, SrcCmd::Up { .. })
+        || matches!(&cmd, SrcCmd::Add { rebuild: true, .. });
+
+    if should_sync {
+        if let Err(e) = sync_voidpkgs(log, &resolved.voidpkgs) {
+            log.error(e);
+            return ExitCode::from(1);
+        }
+    }
 
     match cmd {
         SrcCmd::Search { installed, term } => src_search(log, &resolved, installed, &term),
@@ -213,6 +225,10 @@ pub fn plan_src_updates(
     force: bool,
 ) -> Result<Vec<SrcUpdate>, String> {
     let resolved = resolve_voidpkgs(voidpkgs_override, cfg)?;
+
+    // Sync so src planning sees latest templates when used directly (e.g., `vx src up` logic paths).
+    sync_voidpkgs(log, &resolved.voidpkgs)?;
+
     let target = if let Some(pkgs) = pkgs_override {
         pkgs
     } else {
@@ -225,6 +241,7 @@ pub fn plan_src_updates(
 
     plan_src_updates_with_resolved(log, &resolved, &target, force)
 }
+
 
 pub fn print_up_all_summary(log: &Log, sys: &[SysUpdate], src: &[SrcUpdate]) {
     if log.quiet {
@@ -423,6 +440,62 @@ fn run_xbps_src(log: &Log, voidpkgs: &Path, args: Vec<OsString>) -> ExitCode {
     }
 }
 
+fn sync_voidpkgs(log: &Log, voidpkgs: &Path) -> Result<(), String> {
+    let git_dir = voidpkgs.join(".git");
+    if !git_dir.exists() {
+        return Err(format!(
+            "void-packages at {} is not a git repo (missing .git); cannot sync",
+            voidpkgs.display()
+        ));
+    }
+
+    // refuse if dirty
+    let out = Command::new("git")
+        .current_dir(voidpkgs)
+        .args(["status", "--porcelain"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .output()
+        .map_err(|e| format!("failed to run git status: {e}"))?;
+
+    if !out.status.success() {
+        return Err(format!(
+            "git status failed in {}",
+            voidpkgs.display()
+        ));
+    }
+
+    if !out.stdout.is_empty() {
+        return Err(format!(
+            "void-packages repo is dirty at {} (uncommitted changes); refusing to sync",
+            voidpkgs.display()
+        ));
+    }
+
+    if log.verbose && !log.quiet {
+        log.exec(format!(
+            "(cd {}) && git pull --ff-only",
+            voidpkgs.display()
+        ));
+    }
+
+    let st = Command::new("git")
+        .current_dir(voidpkgs)
+        .args(["pull", "--ff-only"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit())
+        .status()
+        .map_err(|e| format!("failed to run git pull: {e}"))?;
+
+    if st.success() {
+        Ok(())
+    } else {
+        Err(format!("git pull failed in {}", voidpkgs.display()))
+    }
+}
+
 fn add_from_local_repo(
     log: &Log,
     res: &SrcResolved,
@@ -592,6 +665,29 @@ fn plan_src_updates_with_resolved(
     }
 
     Ok(out)
+}
+
+/// Plan source updates WITHOUT syncing void-packages.
+/// This is important for commands like `vx up --all --dry-run` where planning should not mutate state.
+pub fn plan_src_updates_no_sync(
+    log: &Log,
+    voidpkgs_override: Option<PathBuf>,
+    cfg: Option<&Config>,
+    pkgs_override: Option<Vec<String>>,
+    force: bool,
+) -> Result<Vec<SrcUpdate>, String> {
+    let resolved = resolve_voidpkgs(voidpkgs_override, cfg)?;
+    let target = if let Some(pkgs) = pkgs_override {
+        pkgs
+    } else {
+        managed::load_managed()?
+    };
+
+    if target.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    plan_src_updates_with_resolved(log, &resolved, &target, force)
 }
 
 fn parse_template_version_revision(path: &Path) -> Result<(String, String), String> {

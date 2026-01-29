@@ -13,7 +13,8 @@ pub fn run() -> ExitCode {
         verbose: cli.verbose,
     };
 
-    let cfg = match Config::load() {
+    // On first run, optionally bootstrap a default config (interactive, once).
+    let cfg = match Config::load_or_bootstrap_interactive() {
         Ok(c) => c, // Option<Config>
         Err(e) => {
             log.error(format!("vx: {e}"));

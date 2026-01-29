@@ -19,7 +19,6 @@ pub fn search(log: &Log, _cfg: Option<&Config>, installed: bool, term: &[String]
 
     let needle = term.join(" ");
     let opt = if installed { "-s" } else { "-Rs" };
-
     run_query_cmd(log, "xbps-query", &[opt, &needle])
 }
 
@@ -28,7 +27,6 @@ pub fn info(log: &Log, _cfg: Option<&Config>, pkg: &str) -> ExitCode {
         log.error("usage: vx info <pkg>");
         return ExitCode::from(2);
     }
-
     run_query_cmd(log, "xbps-query", &["-R", pkg])
 }
 
@@ -37,7 +35,6 @@ pub fn files(log: &Log, _cfg: Option<&Config>, pkg: &str) -> ExitCode {
         log.error("usage: vx files <pkg>");
         return ExitCode::from(2);
     }
-
     run_query_cmd(log, "xbps-query", &["-f", pkg])
 }
 
@@ -46,7 +43,6 @@ pub fn provides(log: &Log, _cfg: Option<&Config>, path: &str) -> ExitCode {
         log.error("usage: vx provides <path>");
         return ExitCode::from(2);
     }
-
     run_query_cmd(log, "xbps-query", &["-o", path])
 }
 
@@ -103,22 +99,25 @@ pub fn rm(log: &Log, _cfg: Option<&Config>, yes: bool, pkgs: &[String]) -> ExitC
 }
 
 pub fn up_with_yes(log: &Log, _cfg: Option<&Config>, yes: bool) -> ExitCode {
-    // xbps-install -Su
     run_install_cmd(log, &["-Su"], &[], yes)
 }
 
 /// Dry-run system update and parse versions.
+///
 /// Uses: sudo xbps-install -Sun
 ///
-/// IMPORTANT: xbps-install dry-run output format is columnar:
-/// <pkgver> <action> <arch> <repository> <installedsize> <downloadsize>
-/// So we must parse that format and query installed pkgver for "from".
+/// NOTE: xbps may output either:
+///  (A) a human table:
+///      Name Action Version New version Download size
+///  (B) a column-ish plan with pkgver first:
+///      <pkgver> <action> <arch> <repo> ...
+///
+/// We parse BOTH.
 pub fn plan_system_updates(log: &Log, _cfg: Option<&Config>) -> Result<Vec<SysUpdate>, String> {
     let mut cmd = Command::new("sudo");
     cmd.arg("xbps-install");
     cmd.args(["-Sun"]);
-    // allow sudo password prompt if needed
-    cmd.stdin(Stdio::inherit());
+    cmd.stdin(Stdio::inherit()); // allow sudo prompt
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::piped());
 
@@ -128,7 +127,6 @@ pub fn plan_system_updates(log: &Log, _cfg: Option<&Config>) -> Result<Vec<SysUp
         .output()
         .map_err(|e| format!("failed to run xbps-install -Sun: {e}"))?;
 
-    // If sudo failed, we MUST surface it; otherwise vx up -a will lie.
     if !out.status.success() {
         let err = String::from_utf8_lossy(&out.stderr).trim().to_string();
         if err.is_empty() {
@@ -288,37 +286,91 @@ fn run_remove_cmd(log: &Log, opts: &[&str], args: &[String], yes: bool) -> ExitC
     }
 }
 
-/// Parse `xbps-install -Sun` output lines:
-///   <pkgver> <action> <arch> <repo> <installedsize> <downloadsize>
-/// We return SysUpdate entries with:
-///   name = pkgname
-///   from = installed pkgver (or "<not installed>")
-///   to   = pkgver (candidate)
+/// Parse `xbps-install -Sun` output.
+///
+/// Supports:
+///  A) table format:
+///     Name Action Version New version Download size
+///     firefox update 147.0_1 147.0.2_1 82MB
+///
+///  B) column format:
+///     <pkgver> <action> <arch> <repo> ...
 fn parse_xbps_sun_plan(text: &str) -> Result<Vec<SysUpdate>, String> {
     let mut out: Vec<SysUpdate> = Vec::new();
+
+    let mut in_table = false;
 
     for raw in text.lines() {
         let line = raw.trim();
         if line.is_empty() {
+            // table blocks are often followed by blank line
+            in_table = false;
             continue;
         }
 
-        // ignore common non-plan chatter
-        if line.starts_with("=>") || line.starts_with("[") || line.starts_with("xbps-install:") {
+        // ignore repo sync chatter + prompts
+        if line.starts_with("[*]")
+            || line.starts_with("=>")
+            || line.starts_with("xbps-install:")
+            || line.starts_with("Size to download:")
+            || line.starts_with("Size required on disk:")
+            || line.starts_with("Space available on disk:")
+            || line.starts_with("Do you want to continue?")
+            || line.starts_with("Aborting!")
+        {
             continue;
         }
 
+        // Detect the human table header
+        if line.starts_with("Name")
+            && line.contains("Action")
+            && line.contains("Version")
+            && line.contains("New")
+        {
+            in_table = true;
+            continue;
+        }
+
+        // ------------------------
+        // A) parse table rows
+        // ------------------------
+        if in_table {
+            // Expect at least: name action oldver newver ...
+            let cols: Vec<&str> = line.split_whitespace().collect();
+            if cols.len() < 4 {
+                continue;
+            }
+
+            let name = cols[0].to_string();
+            let action = cols[1];
+
+            if !matches!(action, "update" | "install" | "reinstall" | "downgrade") {
+                continue;
+            }
+
+            let oldver = cols[2];
+            let newver = cols[3];
+
+            // normalize into pkgver-ish strings for display
+            let from = format!("{name}-{oldver}");
+            let to = format!("{name}-{newver}");
+
+            out.push(SysUpdate { name, from, to });
+            continue;
+        }
+
+        // ------------------------
+        // B) parse column-ish rows
+        // ------------------------
         let cols: Vec<&str> = line.split_whitespace().collect();
-        if cols.len() < 4 {
+        if cols.len() < 2 {
             continue;
         }
 
         let pkgver = cols[0];
         let action = cols[1];
 
-        // Actions we care about in an "update plan"
-        let interesting = matches!(action, "update" | "install" | "reinstall" | "downgrade");
-        if !interesting {
+        if !matches!(action, "update" | "install" | "reinstall" | "downgrade") {
             continue;
         }
 
@@ -340,7 +392,7 @@ fn parse_xbps_sun_plan(text: &str) -> Result<Vec<SysUpdate>, String> {
         });
     }
 
-    // de-dupe by name (keep the last occurrence)
+    // de-dupe by name (keep last)
     out.sort_by(|a, b| a.name.cmp(&b.name));
     out.dedup_by(|a, b| a.name == b.name);
 

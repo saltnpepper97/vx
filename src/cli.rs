@@ -10,7 +10,7 @@ use std::path::PathBuf;
     version,
     about = "Unified Void package front door (xbps + void-packages)",
     long_about = "vx wraps xbps tools and (optionally) void-packages.\n\n\
-                  For `vx src ...` you must provide a void-packages path via:\n\
+                  For `vx src ...` and `vx pkg ...` you must provide a void-packages path via:\n\
                   - --voidpkgs /path/to/void-packages\n\
                   - VX_VOIDPKGS=/path/to/void-packages\n\
                   - ~/.config/vx/vx.rune (void_packages.path)\n"
@@ -24,7 +24,7 @@ pub struct Cli {
     #[arg(short = 'v', long, global = true)]
     pub verbose: bool,
 
-    /// Override void-packages path for `vx src ...`
+    /// Override void-packages path for `vx src ...` and `vx pkg ...`
     #[arg(long, global = true, value_name = "PATH")]
     pub voidpkgs: Option<PathBuf>,
 
@@ -53,19 +53,19 @@ pub enum Cmd {
     /// Show repo package info (xbps-query -R)
     Info {
         /// Package name.
-        pkg: String
+        pkg: String,
     },
 
     /// List installed files for a package (xbps-query -f)
     Files {
         /// Package name.
-        pkg: String
+        pkg: String,
     },
 
     /// Find which installed package owns a path (xbps-query -o)
     Provides {
         /// Path to check (installed file path).
-        path: String
+        path: String,
     },
 
     /// Install packages (xbps-install).
@@ -115,24 +115,54 @@ pub enum Cmd {
         #[command(subcommand)]
         cmd: SrcCmd,
     },
+
+    /// Packaging helpers (template / checksum workflows)
+    ///
+    /// Examples:
+    ///   vx pkg new foo
+    ///   vx pkg foo --gensum
+    Pkg {
+        /// Target package name (used with flags like --gensum)
+        ///
+        /// Example: vx pkg <name> --gensum
+        name: Option<String>,
+
+        /// Generate/check/update SHA256 sums in template (like xtools xgensum -i)
+        #[arg(long)]
+        gensum: bool,
+
+        /// Force (re-)download of distfiles (xgensum -f)
+        #[arg(short = 'f', long)]
+        force: bool,
+
+        /// Use content checksum (xgensum -c)
+        #[arg(short = 'c', long)]
+        content: bool,
+
+        /// Architecture to generate checksum for (xgensum -a)
+        #[arg(short = 'a', long, value_name = "ARCH")]
+        arch: Option<String>,
+
+        /// Absolute path to hostdir (xgensum -H)
+        #[arg(short = 'H', long, value_name = "PATH")]
+        hostdir: Option<PathBuf>,
+
+        /// Subcommands under `vx pkg ...` (e.g., `vx pkg new`)
+        #[command(subcommand)]
+        cmd: Option<PkgCmd>,
+    },
 }
 
 #[derive(Subcommand, Debug)]
 pub enum SrcCmd {
     /// Build one or more source packages (./xbps-src pkg ...)
-    Build {
-        pkgs: Vec<String>
-    },
+    Build { pkgs: Vec<String> },
 
     /// Clean build files for one or more source packages (./xbps-src clean ...)
-    Clean {
-        pkgs: Vec<String>
-    },
+    Clean { pkgs: Vec<String> },
 
     /// Lint one or more source packages (./xbps-src lint ...)
-    Lint {
-        pkgs: Vec<String>
-    },
+    Lint { pkgs: Vec<String> },
 
     /// Search void-packages srcpkgs by name.
     ///
@@ -188,6 +218,15 @@ pub enum SrcCmd {
 
         /// Packages to update (ignored with --all).
         pkgs: Vec<String>,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum PkgCmd {
+    /// Create a new srcpkg skeleton (delegates to xtools `xnew`)
+    New {
+        /// Package name to create under srcpkgs/
+        name: String,
     },
 }
 

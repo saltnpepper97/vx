@@ -5,7 +5,7 @@ use crate::paths::user_config_path;
 use rune_cfg::RuneConfig;
 use std::{
     fs,
-    io::{self, Write},
+    io::{self, IsTerminal, Write},
     path::{Path, PathBuf},
 };
 
@@ -27,30 +27,29 @@ pub struct Config {
 }
 
 impl Config {
-    /// Load user config if present. Config is optional.
-    /// If not present, VX may prompt to bootstrap a default config on first use.
-    pub fn load() -> Result<Option<Self>, String> {
-        let path = user_config_path()?;
-        if !path.exists() {
-            return Ok(None);
-        }
-        Self::from_file(&path).map(Some)
-    }
-
     /// Bootstrap behavior:
-    /// - If config doesn't exist, ask once (interactive) whether to create a default config at:
+    /// - If config doesn't exist, ask ONCE (interactive) whether to create a default config at:
     ///     $HOME/.config/vx/vx.rune
-    /// - If user says no, VX continues with "no config" behavior.
+    /// - If user says no, VX creates a sentinel so it won't ask again.
     ///
-    /// NOTE: This uses stdin/stdout; keep it early in program startup before running subcommands.
+    /// NOTE: This uses stdin/stdout; keep it early in program startup.
     pub fn load_or_bootstrap_interactive() -> Result<Option<Self>, String> {
         let path = user_config_path()?;
         if path.exists() {
             return Self::from_file(&path).map(Some);
         }
 
-        // Only prompt if we have a TTY-ish interactive session.
-        // (No external deps: just do a simple prompt and accept empty input as "yes".)
+        // Only prompt if stdin+stdout are terminals.
+        if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
+            return Ok(None);
+        }
+
+        // Ask-once sentinel (if user previously said "no", do not prompt again).
+        let sentinel = bootstrap_sentinel_path(&path)?;
+        if sentinel.exists() {
+            return Ok(None);
+        }
+
         println!(
             "vx: no config found.\n\
              Create default config at {} ?\n\
@@ -71,6 +70,8 @@ impl Config {
 
         let yes = t.is_empty() || matches!(t.as_str(), "y" | "yes");
         if !yes {
+            // Mark that we asked already so we don't nag on every run.
+            write_bootstrap_sentinel(&sentinel)?;
             return Ok(None);
         }
 
@@ -114,6 +115,23 @@ impl Config {
             use_nonfree,
         })
     }
+}
+
+fn bootstrap_sentinel_path(config_path: &Path) -> Result<PathBuf, String> {
+    let dir = config_path
+        .parent()
+        .ok_or_else(|| format!("invalid config path: {}", config_path.display()))?;
+    Ok(dir.join(".vx_bootstrap_asked"))
+}
+
+fn write_bootstrap_sentinel(path: &Path) -> Result<(), String> {
+    if let Some(dir) = path.parent() {
+        fs::create_dir_all(dir)
+            .map_err(|e| format!("failed to create config dir {}: {e}", dir.display()))?;
+    }
+    fs::write(path, b"asked\n")
+        .map_err(|e| format!("failed to write sentinel {}: {e}", path.display()))?;
+    Ok(())
 }
 
 fn write_default_config(path: &Path) -> Result<(), String> {
