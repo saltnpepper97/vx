@@ -45,6 +45,7 @@ pub fn dispatch(log: &Log, cli: Cli, cfg: Option<Config>) -> ExitCode {
                     };
 
                     if sys_plan.is_empty() {
+                        // keep existing behavior for system-only
                         log.info("already up to date.");
                         return ExitCode::SUCCESS;
                     }
@@ -60,7 +61,7 @@ pub fn dispatch(log: &Log, cli: Cli, cfg: Option<Config>) -> ExitCode {
             }
 
             // vx up -a (system + source):
-            // Plan both without mutating (no git pull), confirm once, then sync+replan source and apply.
+            // Do the real checks up front, but keep them QUIET (no git pull chatter).
             let sys_plan = match xbps::plan_system_updates(log, cfg.as_ref()) {
                 Ok(v) => v,
                 Err(e) => {
@@ -69,8 +70,7 @@ pub fn dispatch(log: &Log, cli: Cli, cfg: Option<Config>) -> ExitCode {
                 }
             };
 
-            // Preview source plan WITHOUT syncing (planning should be non-mutating; esp. for --dry-run).
-            let src_plan_preview = match source::plan_src_updates_no_sync(
+            let src_plan = match source::plan_src_updates(
                 log,
                 voidpkgs_override.clone(),
                 cfg.as_ref(),
@@ -84,8 +84,18 @@ pub fn dispatch(log: &Log, cli: Cli, cfg: Option<Config>) -> ExitCode {
                 }
             };
 
-            source::print_up_all_summary(log, &sys_plan, &src_plan_preview);
+            // Always show a single summary block.
+            source::print_up_all_summary(log, &sys_plan, &src_plan);
 
+            // If nothing, DO NOT prompt; print exactly one final line.
+            if sys_plan.is_empty() && src_plan.is_empty() {
+                if !log.quiet {
+                    println!("vx: already up to date.");
+                }
+                return ExitCode::SUCCESS;
+            }
+
+            // dry-run stops after listing
             if dry_run {
                 return ExitCode::SUCCESS;
             }
@@ -95,37 +105,6 @@ pub fn dispatch(log: &Log, cli: Cli, cfg: Option<Config>) -> ExitCode {
                     log.info("aborted.");
                     return ExitCode::SUCCESS;
                 }
-            }
-
-            // ---- APPLY PHASE ----
-            // Recompute source plan with syncing (this is the accurate plan).
-            let src_plan: Vec<source::SrcUpdate> = match source::plan_src_updates(
-                log,
-                voidpkgs_override.clone(),
-                cfg.as_ref(),
-                None,
-                force,
-            ) {
-                Ok(v) => v,
-                Err(e) => {
-                    log.error(e);
-                    return ExitCode::from(1);
-                }
-            };
-
-            // Optional: show refreshed source plan if it changed.
-            if !log.quiet && src_plan != src_plan_preview {
-                println!();
-                println!("vx: source plan refreshed after syncing void-packages");
-                for p in &src_plan {
-                    let from = p.installed.as_deref().unwrap_or("<not installed>");
-                    println!("  {}  {} → {}", p.name, from, p.candidate);
-                }
-            }
-
-            if sys_plan.is_empty() && src_plan.is_empty() {
-                log.info("already up to date.");
-                return ExitCode::SUCCESS;
             }
 
             // Apply system updates first, then source.

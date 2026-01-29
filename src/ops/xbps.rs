@@ -113,10 +113,13 @@ pub fn up_with_yes(log: &Log, _cfg: Option<&Config>, yes: bool) -> ExitCode {
 ///      <pkgver> <action> <arch> <repo> ...
 ///
 /// We parse BOTH.
+///
+/// IMPORTANT: We disable colors + strip ANSI so parsing doesn't silently break.
 pub fn plan_system_updates(log: &Log, _cfg: Option<&Config>) -> Result<Vec<SysUpdate>, String> {
     let mut cmd = Command::new("sudo");
     cmd.arg("xbps-install");
     cmd.args(["-Sun"]);
+    cmd.env("XBPS_COLORS", "0"); // avoid ANSI output that can break parsing
     cmd.stdin(Stdio::inherit()); // allow sudo prompt
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::piped());
@@ -143,8 +146,22 @@ pub fn plan_system_updates(log: &Log, _cfg: Option<&Config>) -> Result<Vec<SysUp
         String::from_utf8_lossy(&out.stdout),
         String::from_utf8_lossy(&out.stderr)
     );
+    let text = strip_ansi(&text);
 
-    parse_xbps_sun_plan(&text)
+    let plan = parse_xbps_sun_plan(&text)?;
+
+    // Refuse to silently claim "no updates" if output smelled like a plan but we parsed nothing.
+    if plan.is_empty()
+        && (text.contains("Name")
+            && text.contains("Action")
+            && text.contains("Version")
+            && text.contains("New"))
+    {
+        return Err("failed to parse xbps -Sun output (format changed); refusing to report empty plan"
+            .to_string());
+    }
+
+    Ok(plan)
 }
 
 fn is_installed(xbps_query: &str, pkg: &str) -> Result<bool, String> {
@@ -303,7 +320,6 @@ fn parse_xbps_sun_plan(text: &str) -> Result<Vec<SysUpdate>, String> {
     for raw in text.lines() {
         let line = raw.trim();
         if line.is_empty() {
-            // table blocks are often followed by blank line
             in_table = false;
             continue;
         }
@@ -335,7 +351,6 @@ fn parse_xbps_sun_plan(text: &str) -> Result<Vec<SysUpdate>, String> {
         // A) parse table rows
         // ------------------------
         if in_table {
-            // Expect at least: name action oldver newver ...
             let cols: Vec<&str> = line.split_whitespace().collect();
             if cols.len() < 4 {
                 continue;
@@ -351,7 +366,6 @@ fn parse_xbps_sun_plan(text: &str) -> Result<Vec<SysUpdate>, String> {
             let oldver = cols[2];
             let newver = cols[3];
 
-            // normalize into pkgver-ish strings for display
             let from = format!("{name}-{oldver}");
             let to = format!("{name}-{newver}");
 
@@ -406,5 +420,26 @@ fn pkgname_from_pkgver(pkgver: &str) -> Option<String> {
     } else {
         None
     }
+}
+
+fn strip_ansi(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut it = s.chars().peekable();
+    while let Some(c) = it.next() {
+        if c == '\x1b' {
+            if it.peek() == Some(&'[') {
+                it.next(); // '['
+                // consume until final letter
+                while let Some(n) = it.next() {
+                    if n.is_ascii_alphabetic() {
+                        break;
+                    }
+                }
+                continue;
+            }
+        }
+        out.push(c);
+    }
+    out
 }
 

@@ -226,7 +226,7 @@ pub fn plan_src_updates(
 ) -> Result<Vec<SrcUpdate>, String> {
     let resolved = resolve_voidpkgs(voidpkgs_override, cfg)?;
 
-    // Sync so src planning sees latest templates when used directly (e.g., `vx src up` logic paths).
+    // Sync so planning sees latest templates.
     sync_voidpkgs(log, &resolved.voidpkgs)?;
 
     let target = if let Some(pkgs) = pkgs_override {
@@ -242,14 +242,12 @@ pub fn plan_src_updates(
     plan_src_updates_with_resolved(log, &resolved, &target, force)
 }
 
-
 pub fn print_up_all_summary(log: &Log, sys: &[SysUpdate], src: &[SrcUpdate]) {
     if log.quiet {
         return;
     }
 
-    println!("vx: update --all summary");
-
+    println!("Summary:");
     println!("  system: xbps-install -Su");
     if sys.is_empty() {
         println!("    (no system updates found)");
@@ -460,10 +458,7 @@ fn sync_voidpkgs(log: &Log, voidpkgs: &Path) -> Result<(), String> {
         .map_err(|e| format!("failed to run git status: {e}"))?;
 
     if !out.status.success() {
-        return Err(format!(
-            "git status failed in {}",
-            voidpkgs.display()
-        ));
+        return Err(format!("git status failed in {}", voidpkgs.display()));
     }
 
     if !out.stdout.is_empty() {
@@ -474,25 +469,46 @@ fn sync_voidpkgs(log: &Log, voidpkgs: &Path) -> Result<(), String> {
     }
 
     if log.verbose && !log.quiet {
-        log.exec(format!(
-            "(cd {}) && git pull --ff-only",
-            voidpkgs.display()
-        ));
+        log.exec(format!("(cd {}) && git pull --ff-only", voidpkgs.display()));
     }
 
-    let st = Command::new("git")
-        .current_dir(voidpkgs)
-        .args(["pull", "--ff-only"])
-        .stdin(Stdio::null())
-        .stdout(Stdio::inherit())
-        .stderr(Stdio::inherit())
-        .status()
+    // Quiet by default: capture output so git can't print "Already up to date."
+    let mut cmd = Command::new("git");
+    cmd.current_dir(voidpkgs).args(["pull", "--ff-only"]);
+    cmd.stdin(Stdio::null());
+
+    if log.verbose && !log.quiet {
+        cmd.stdout(Stdio::inherit());
+        cmd.stderr(Stdio::inherit());
+
+        let st = cmd
+            .status()
+            .map_err(|e| format!("failed to run git pull: {e}"))?;
+
+        return if st.success() {
+            Ok(())
+        } else {
+            Err(format!("git pull failed in {}", voidpkgs.display()))
+        };
+    }
+
+    // Non-verbose: capture and suppress, but still surface errors.
+    cmd.stdout(Stdio::piped());
+    cmd.stderr(Stdio::piped());
+
+    let out = cmd
+        .output()
         .map_err(|e| format!("failed to run git pull: {e}"))?;
 
-    if st.success() {
+    if out.status.success() {
         Ok(())
     } else {
-        Err(format!("git pull failed in {}", voidpkgs.display()))
+        let err = String::from_utf8_lossy(&out.stderr).trim().to_string();
+        if err.is_empty() {
+            Err(format!("git pull failed in {}", voidpkgs.display()))
+        } else {
+            Err(format!("git pull failed in {}: {}", voidpkgs.display(), err))
+        }
     }
 }
 
@@ -665,29 +681,6 @@ fn plan_src_updates_with_resolved(
     }
 
     Ok(out)
-}
-
-/// Plan source updates WITHOUT syncing void-packages.
-/// This is important for commands like `vx up --all --dry-run` where planning should not mutate state.
-pub fn plan_src_updates_no_sync(
-    log: &Log,
-    voidpkgs_override: Option<PathBuf>,
-    cfg: Option<&Config>,
-    pkgs_override: Option<Vec<String>>,
-    force: bool,
-) -> Result<Vec<SrcUpdate>, String> {
-    let resolved = resolve_voidpkgs(voidpkgs_override, cfg)?;
-    let target = if let Some(pkgs) = pkgs_override {
-        pkgs
-    } else {
-        managed::load_managed()?
-    };
-
-    if target.is_empty() {
-        return Ok(Vec::new());
-    }
-
-    plan_src_updates_with_resolved(log, &resolved, &target, force)
 }
 
 fn parse_template_version_revision(path: &Path) -> Result<(String, String), String> {

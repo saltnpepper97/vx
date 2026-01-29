@@ -158,12 +158,13 @@ fn default_config_text() -> String {
 @description "Unified Void package manager config (xbps + void-packages)"
 
 base:
-  debug: false
+  debug false
 end
 
 # Optional. Only needed if you want `vx src ...` without setting VX_VOIDPKGS or using --voidpkgs.
 void_packages:
-  path "$env.HOME/void-packages"
+  # Uncomment and set this variable to the location of your void-packages directory
+  #path "$env.HOME/void-packages"
 
   # relative to void-packages root
   local_repo "hostdir/binpkgs"
