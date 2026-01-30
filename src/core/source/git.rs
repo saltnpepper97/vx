@@ -3,11 +3,35 @@
 
 use crate::{cache, log::Log};
 use std::{
-    path::Path,
+    collections::hash_map::DefaultHasher,
+    fs,
+    hash::{Hash, Hasher},
+    path::{Path, PathBuf},
     process::{Command, Stdio},
 };
 
 const UPSTREAM_REF: &str = "upstream/master";
+
+fn xdg_cache_home() -> PathBuf {
+    if let Ok(v) = std::env::var("XDG_CACHE_HOME") {
+        let p = PathBuf::from(v);
+        if !p.as_os_str().is_empty() {
+            return p;
+        }
+    }
+    let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+    PathBuf::from(home).join(".cache")
+}
+
+fn worktree_root_dir() -> PathBuf {
+    xdg_cache_home().join("vx").join("worktrees")
+}
+
+fn stable_hash(s: &str) -> String {
+    let mut h = DefaultHasher::new();
+    s.hash(&mut h);
+    format!("{:016x}", h.finish())
+}
 
 /// Fetch upstream refs without modifying the current branch/working tree.
 ///
@@ -123,5 +147,131 @@ pub fn read_template_upstream(voidpkgs: &Path, pkg: &str) -> Result<String, Stri
     }
 
     Ok(String::from_utf8_lossy(&out.stdout).to_string())
+}
+
+/// Ensure we have a reusable worktree checked out at upstream/master, and return its path.
+///
+/// Behavior:
+/// - Worktree lives in ~/.cache/vx/worktrees/<hash>/upstream-master
+/// - If missing, we `git worktree add --detach` it.
+/// - Each call then hard-resets it to upstream/master and cleans untracked files.
+/// - This lets us build upstream templates without touching your current branch.
+pub fn ensure_upstream_worktree(log: &Log, voidpkgs: &Path) -> Result<PathBuf, String> {
+    // Ensure upstream ref is current (cached fetch)
+    sync_voidpkgs(log, voidpkgs)?;
+
+    let root = worktree_root_dir();
+    fs::create_dir_all(&root).map_err(|e| format!("failed to create worktree dir: {e}"))?;
+
+    let h = stable_hash(&voidpkgs.display().to_string());
+    let repo_bucket = root.join(h);
+    fs::create_dir_all(&repo_bucket)
+        .map_err(|e| format!("failed to create worktree bucket: {e}"))?;
+
+    let wt = repo_bucket.join("upstream-master");
+
+    // If it doesn't exist, add it.
+    if !wt.exists() {
+        if log.verbose && !log.quiet {
+            log.exec(format!(
+                "(cd {}) && git worktree add --detach {} {}",
+                voidpkgs.display(),
+                wt.display(),
+                UPSTREAM_REF
+            ));
+        }
+
+        let out = Command::new("git")
+            .current_dir(voidpkgs)
+            .args([
+                "worktree",
+                "add",
+                "--detach",
+                wt.to_string_lossy().as_ref(),
+                UPSTREAM_REF,
+            ])
+            .stdin(Stdio::null())
+            .stdout(if log.verbose && !log.quiet {
+                Stdio::inherit()
+            } else {
+                Stdio::null()
+            })
+            .stderr(if log.verbose && !log.quiet {
+                Stdio::inherit()
+            } else {
+                Stdio::null()
+            })
+            .status()
+            .map_err(|e| format!("failed to run git worktree add: {e}"))?;
+
+        if !out.success() {
+            return Err(format!(
+                "git worktree add failed for {}",
+                wt.display()
+            ));
+        }
+    }
+
+    // Make sure the worktree is exactly at upstream/master and clean.
+    // (Detached worktree can be safely reset; it's vx-owned.)
+    if log.verbose && !log.quiet {
+        log.exec(format!(
+            "(cd {}) && git reset --hard {}",
+            wt.display(),
+            UPSTREAM_REF
+        ));
+    }
+
+    let st = Command::new("git")
+        .current_dir(&wt)
+        .args(["reset", "--hard", UPSTREAM_REF])
+        .stdin(Stdio::null())
+        .stdout(if log.verbose && !log.quiet {
+            Stdio::inherit()
+        } else {
+            Stdio::null()
+        })
+        .stderr(if log.verbose && !log.quiet {
+            Stdio::inherit()
+        } else {
+            Stdio::null()
+        })
+        .status()
+        .map_err(|e| format!("failed to run git reset in worktree: {e}"))?;
+
+    if !st.success() {
+        return Err(format!(
+            "failed to reset worktree to {} at {}",
+            UPSTREAM_REF,
+            wt.display()
+        ));
+    }
+
+    if log.verbose && !log.quiet {
+        log.exec(format!("(cd {}) && git clean -fdx", wt.display()));
+    }
+
+    let st = Command::new("git")
+        .current_dir(&wt)
+        .args(["clean", "-fdx"])
+        .stdin(Stdio::null())
+        .stdout(if log.verbose && !log.quiet {
+            Stdio::inherit()
+        } else {
+            Stdio::null()
+        })
+        .stderr(if log.verbose && !log.quiet {
+            Stdio::inherit()
+        } else {
+            Stdio::null()
+        })
+        .status()
+        .map_err(|e| format!("failed to run git clean in worktree: {e}"))?;
+
+    if !st.success() {
+        return Err(format!("failed to clean worktree at {}", wt.display()));
+    }
+
+    Ok(wt)
 }
 

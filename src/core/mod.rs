@@ -32,6 +32,7 @@ pub fn dispatch(log: &Log, cli: Cli, cfg: Option<Config>) -> ExitCode {
             dry_run,
             force,
             yes,
+            remote,
         } => {
             // vx up (system only)
             if !all {
@@ -124,6 +125,7 @@ pub fn dispatch(log: &Log, cli: Cli, cfg: Option<Config>) -> ExitCode {
                     dry_run: false,
                     force: true,
                     yes: true,
+                    remote,
                     pkgs: pkgs_to_update,
                 },
             )

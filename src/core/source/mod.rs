@@ -61,7 +61,8 @@ pub fn dispatch_src(
             pkgs,
         } => {
             let code = if rebuild {
-                xbps_src::src_up(log, &resolved, yes, &pkgs)
+                // local rebuild (current behavior)
+                xbps_src::src_up(log, &resolved, yes, false, &pkgs)
             } else {
                 add::add_from_local_repo(log, &resolved, force, yes, &pkgs)
             };
@@ -79,6 +80,7 @@ pub fn dispatch_src(
             dry_run,
             force,
             yes,
+            remote,
             pkgs,
         } => {
             let target = if all {
@@ -130,7 +132,7 @@ pub fn dispatch_src(
             }
 
             let pkgs_to_update: Vec<String> = plan.iter().map(|p| p.name.clone()).collect();
-            xbps_src::src_up(log, &resolved, yes, &pkgs_to_update)
+            xbps_src::src_up(log, &resolved, yes, remote, &pkgs_to_update)
         }
     }
 }

@@ -108,6 +108,12 @@ pub enum Cmd {
         /// Skip the single confirmation prompt (implies -y when invoking xbps).
         #[arg(short = 'y', long, aliases = ["no-confirm", "noconfirm"])]
         yes: bool,
+
+        /// For --all: build source updates from upstream templates via git worktree.
+        ///
+        /// Default is local templates (your current checkout).
+        #[arg(long, alias = "upstream")]
+        remote: bool,
     },
 
     /// void-packages / xbps-src operations (source builds)
@@ -215,6 +221,12 @@ pub enum SrcCmd {
         /// Skip the single confirmation prompt (implies -y when invoking xbps).
         #[arg(short = 'y', long, aliases = ["no-confirm", "noconfirm"])]
         yes: bool,
+
+        /// Build updates from upstream templates via git worktree.
+        ///
+        /// Default is local templates (your current checkout).
+        #[arg(long, alias = "upstream")]
+        remote: bool,
 
         /// Packages to update (ignored with --all).
         pkgs: Vec<String>,
