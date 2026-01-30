@@ -7,11 +7,17 @@ use std::{
     process::{Command, Stdio},
 };
 
+const UPSTREAM_REF: &str = "upstream/master";
+
+/// Fetch upstream refs without modifying the current branch/working tree.
+///
+/// - Uses TTL caching (default 10m). Set VX_FRESH=1 to force.
+/// - Does NOT merge/rebase your branch.
+/// - Safe even if repo is dirty.
 pub fn sync_voidpkgs(log: &Log, voidpkgs: &Path) -> Result<(), String> {
     let ttl = cache::sync_ttl_secs();
-    let cache_key = format!("voidpkgs.sync:{}", voidpkgs.display());
+    let cache_key = format!("voidpkgs.fetch:{}", voidpkgs.display());
 
-    // Refuse if not a git repo
     let git_dir = voidpkgs.join(".git");
     if !git_dir.exists() {
         return Err(format!(
@@ -20,39 +26,16 @@ pub fn sync_voidpkgs(log: &Log, voidpkgs: &Path) -> Result<(), String> {
         ));
     }
 
-    // Refuse if dirty (always; cheap and prevents bad surprises)
-    let out = Command::new("git")
-        .current_dir(voidpkgs)
-        .args(["status", "--porcelain"])
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .output()
-        .map_err(|e| format!("failed to run git status: {e}"))?;
-
-    if !out.status.success() {
-        return Err(format!("git status failed in {}", voidpkgs.display()));
-    }
-
-    if !out.stdout.is_empty() {
-        return Err(format!(
-            "void-packages repo is dirty at {} (uncommitted changes); refusing to sync",
-            voidpkgs.display()
-        ));
-    }
-
-    // TTL hit → skip network pull
     if cache::is_fresh(&cache_key, ttl) {
         if log.verbose && !log.quiet {
             log.exec(format!(
-                "cache hit: skip git pull (ttl={}s); set VX_FRESH=1 to force",
+                "cache hit: skip git fetch (ttl={}s); set VX_FRESH=1 to force",
                 ttl
             ));
         }
         return Ok(());
     }
 
-    // Ensure upstream exists
     let has_upstream = Command::new("git")
         .current_dir(voidpkgs)
         .args(["remote", "get-url", "upstream"])
@@ -77,14 +60,14 @@ pub fn sync_voidpkgs(log: &Log, voidpkgs: &Path) -> Result<(), String> {
 
     if log.verbose && !log.quiet {
         log.exec(format!(
-            "(cd {}) && git pull upstream master",
+            "(cd {}) && git fetch upstream master",
             voidpkgs.display()
         ));
     }
 
     let mut cmd = Command::new("git");
     cmd.current_dir(voidpkgs)
-        .args(["pull", "upstream", "master"])
+        .args(["fetch", "upstream", "master"])
         .stdin(Stdio::null());
 
     if log.verbose && !log.quiet {
@@ -97,16 +80,48 @@ pub fn sync_voidpkgs(log: &Log, voidpkgs: &Path) -> Result<(), String> {
 
     let status = cmd
         .status()
-        .map_err(|e| format!("failed to run git pull: {e}"))?;
+        .map_err(|e| format!("failed to run git fetch: {e}"))?;
 
     if status.success() {
         cache::mark(&cache_key);
         Ok(())
     } else {
         Err(format!(
-            "git pull upstream master failed in {}",
+            "git fetch upstream master failed in {}",
             voidpkgs.display()
         ))
     }
+}
+
+/// Read an upstream template without checking anything out.
+///
+/// Equivalent to:
+///   git show upstream/master:srcpkgs/<pkg>/template
+pub fn read_template_upstream(voidpkgs: &Path, pkg: &str) -> Result<String, String> {
+    let pkg = pkg.trim();
+    if pkg.is_empty() {
+        return Err("empty package name".to_string());
+    }
+
+    let spec = format!("{UPSTREAM_REF}:srcpkgs/{pkg}/template");
+
+    let out = Command::new("git")
+        .current_dir(voidpkgs)
+        .args(["show", &spec])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .map_err(|e| format!("failed to run git show: {e}"))?;
+
+    if !out.status.success() {
+        let err = String::from_utf8_lossy(&out.stderr).trim().to_string();
+        if err.is_empty() {
+            return Err(format!("git show failed for {spec}"));
+        }
+        return Err(err);
+    }
+
+    Ok(String::from_utf8_lossy(&out.stdout).to_string())
 }
 

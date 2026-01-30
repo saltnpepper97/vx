@@ -5,7 +5,7 @@ use crate::log::Log;
 use std::process::{Command, ExitCode, Stdio};
 
 use super::resolve::SrcResolved;
-use super::plan::parse_template_version_revision;
+use super::plan::parse_template_version_revision_file;
 
 pub fn src_search(log: &Log, res: &SrcResolved, installed_only: bool, term: &str) -> ExitCode {
     let needle = term.trim();
@@ -58,7 +58,7 @@ pub fn src_search(log: &Log, res: &SrcResolved, installed_only: bool, term: &str
         }
 
         let tpl = ent.path().join("template");
-        let ver = match parse_template_version_revision(&tpl) {
+        let ver = match parse_template_version_revision_file(&tpl) {
             Ok((v, r)) => Some(format!("{v}_{r}")),
             Err(_) => None,
         };

@@ -28,7 +28,7 @@ pub fn plan_src_updates(
 ) -> Result<Vec<SrcUpdate>, String> {
     let resolved = resolve_voidpkgs(voidpkgs_override, cfg)?;
 
-    // NOTE: git::sync_voidpkgs has TTL caching now
+    // fetch (TTL cached)
     git::sync_voidpkgs(log, &resolved.voidpkgs)?;
 
     let target = if let Some(pkgs) = pkgs_override {
@@ -50,9 +50,8 @@ pub fn plan_src_updates_with_resolved(
     pkgs: &[String],
     force: bool,
 ) -> Result<Vec<SrcUpdate>, String> {
-    // One-shot installed map (big speed win)
+    // One-shot installed map (speed win)
     let installed_map = load_installed_pkgver_map().unwrap_or_else(|e| {
-        // Non-fatal: fall back to "unknown installed", but warn once.
         log.warn(format!("failed to load installed package list: {e}"));
         HashMap::new()
     });
@@ -60,23 +59,38 @@ pub fn plan_src_updates_with_resolved(
     let mut out = Vec::new();
 
     for name in pkgs {
-        let tpl = res
-            .voidpkgs
-            .join("srcpkgs")
-            .join(name)
-            .join("template");
+        // Prefer upstream template (Option B)
+        let upstream_tpl = match git::read_template_upstream(&res.voidpkgs, name) {
+            Ok(s) => Some(s),
+            Err(_) => None,
+        };
 
-        let (ver, rev) = match parse_template_version_revision(&tpl) {
-            Ok(v) => v,
-            Err(e) => {
-                log.warn(format!("{name}: {e}"));
-                continue;
+        let (ver, rev) = if let Some(text) = upstream_tpl {
+            match parse_template_version_revision_str(&text) {
+                Ok(v) => v,
+                Err(e) => {
+                    log.warn(format!("{name}: upstream template parse failed: {e}"));
+                    continue;
+                }
+            }
+        } else {
+            // Fallback: local working tree template
+            let tpl = res
+                .voidpkgs
+                .join("srcpkgs")
+                .join(name)
+                .join("template");
+
+            match parse_template_version_revision_file(&tpl) {
+                Ok(v) => v,
+                Err(e) => {
+                    log.warn(format!("{name}: {e}"));
+                    continue;
+                }
             }
         };
 
         let candidate = format!("{name}-{ver}_{rev}");
-
-        // installed is full pkgver (name-version_rev), if installed
         let installed = installed_map.get(name).cloned();
 
         if !force {
@@ -97,8 +111,8 @@ pub fn plan_src_updates_with_resolved(
     Ok(out)
 }
 
-/// Build a HashMap of installed package name -> pkgver (e.g. "firefox" -> "firefox-147.0_1").
-/// This avoids N process spawns during planning.
+/// Build a HashMap of installed package name -> pkgver.
+/// Avoids N spawns of `xbps-query -p pkgver ...`.
 fn load_installed_pkgver_map() -> Result<HashMap<String, String>, String> {
     let out = Command::new("xbps-query")
         .arg("-l")
@@ -115,9 +129,8 @@ fn load_installed_pkgver_map() -> Result<HashMap<String, String>, String> {
     let text = String::from_utf8_lossy(&out.stdout);
     let mut map: HashMap<String, String> = HashMap::new();
 
-    // Typical lines look like:
+    // Example:
     // ii  firefox-147.0_1  Mozilla Firefox Web Browser
-    // (status, pkgver, description...)
     for line in text.lines() {
         let line = line.trim();
         if line.is_empty() {
@@ -155,10 +168,13 @@ fn pkgname_from_pkgver(pkgver: &str) -> Option<String> {
     }
 }
 
-pub fn parse_template_version_revision(path: &Path) -> Result<(String, String), String> {
+pub fn parse_template_version_revision_file(path: &Path) -> Result<(String, String), String> {
     let text = std::fs::read_to_string(path)
         .map_err(|e| format!("failed to read template {}: {e}", path.display()))?;
+    parse_template_version_revision_str(&text)
+}
 
+pub fn parse_template_version_revision_str(text: &str) -> Result<(String, String), String> {
     let mut version: Option<String> = None;
     let mut revision: Option<String> = None;
 
