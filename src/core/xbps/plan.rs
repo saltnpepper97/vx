@@ -1,7 +1,7 @@
 // Author Dustin Pilgrim
 // License: MIT
 
-use crate::{config::Config, log::Log};
+use crate::{cache, config::Config, log::Log};
 use std::process::{Command, Stdio};
 
 use super::{parse, query};
@@ -15,12 +15,16 @@ pub struct SysUpdate {
 
 /// Dry-run system update and parse versions.
 ///
-/// Key behavior change:
-/// - Always sync repositories first (`sudo xbps-install -S`)
-/// - Then run dry-run update plan (`sudo xbps-install -un`)
+/// Performance behavior:
+/// - `xbps-install -S` is cached with a TTL (default 10m).
+/// - Always runs `xbps-install -un` to produce the plan.
+/// - Set VX_FRESH=1 to force a resync, or VX_SYNC_TTL_SECS to override TTL.
 pub fn plan_system_updates(log: &Log, _cfg: Option<&Config>) -> Result<Vec<SysUpdate>, String> {
-    // 1) Sync repodata first
-    {
+    let ttl = cache::sync_ttl_secs();
+    let cache_key = "xbps.repodata.sync";
+
+    // 1) Sync repodata if needed
+    if !cache::is_fresh(cache_key, ttl) {
         let mut sync = Command::new("sudo");
         sync.arg("xbps-install");
         sync.args(["-S"]);
@@ -47,9 +51,16 @@ pub fn plan_system_updates(log: &Log, _cfg: Option<&Config>) -> Result<Vec<SysUp
             }
             return Err(format!("xbps-install -S failed: {err}"));
         }
+
+        cache::mark(cache_key);
+    } else if log.verbose && !log.quiet {
+        log.exec(format!(
+            "cache hit: skip repodata sync (ttl={}s); set VX_FRESH=1 to force",
+            ttl
+        ));
     }
 
-    // 2) Dry-run update plan based on freshly synced repodata
+    // 2) Dry-run update plan (always)
     let mut cmd = Command::new("sudo");
     cmd.arg("xbps-install");
     cmd.args(["-un"]);

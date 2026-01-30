@@ -1,13 +1,17 @@
 // Author Dustin Pilgrim
 // License: MIT
 
-use crate::log::Log;
+use crate::{cache, log::Log};
 use std::{
     path::Path,
     process::{Command, Stdio},
 };
 
 pub fn sync_voidpkgs(log: &Log, voidpkgs: &Path) -> Result<(), String> {
+    let ttl = cache::sync_ttl_secs();
+    let cache_key = format!("voidpkgs.sync:{}", voidpkgs.display());
+
+    // Refuse if not a git repo
     let git_dir = voidpkgs.join(".git");
     if !git_dir.exists() {
         return Err(format!(
@@ -16,7 +20,7 @@ pub fn sync_voidpkgs(log: &Log, voidpkgs: &Path) -> Result<(), String> {
         ));
     }
 
-    // Refuse if dirty
+    // Refuse if dirty (always; cheap and prevents bad surprises)
     let out = Command::new("git")
         .current_dir(voidpkgs)
         .args(["status", "--porcelain"])
@@ -35,6 +39,17 @@ pub fn sync_voidpkgs(log: &Log, voidpkgs: &Path) -> Result<(), String> {
             "void-packages repo is dirty at {} (uncommitted changes); refusing to sync",
             voidpkgs.display()
         ));
+    }
+
+    // TTL hit → skip network pull
+    if cache::is_fresh(&cache_key, ttl) {
+        if log.verbose && !log.quiet {
+            log.exec(format!(
+                "cache hit: skip git pull (ttl={}s); set VX_FRESH=1 to force",
+                ttl
+            ));
+        }
+        return Ok(());
     }
 
     // Ensure upstream exists
@@ -85,6 +100,7 @@ pub fn sync_voidpkgs(log: &Log, voidpkgs: &Path) -> Result<(), String> {
         .map_err(|e| format!("failed to run git pull: {e}"))?;
 
     if status.success() {
+        cache::mark(&cache_key);
         Ok(())
     } else {
         Err(format!(

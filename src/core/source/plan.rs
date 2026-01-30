@@ -2,8 +2,11 @@
 // License: MIT
 
 use crate::{config::Config, log::Log, managed};
-use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::{
+    collections::HashMap,
+    path::{Path, PathBuf},
+    process::{Command, Stdio},
+};
 
 use super::git;
 use super::resolve::{resolve_voidpkgs, SrcResolved};
@@ -25,6 +28,7 @@ pub fn plan_src_updates(
 ) -> Result<Vec<SrcUpdate>, String> {
     let resolved = resolve_voidpkgs(voidpkgs_override, cfg)?;
 
+    // NOTE: git::sync_voidpkgs has TTL caching now
     git::sync_voidpkgs(log, &resolved.voidpkgs)?;
 
     let target = if let Some(pkgs) = pkgs_override {
@@ -46,6 +50,13 @@ pub fn plan_src_updates_with_resolved(
     pkgs: &[String],
     force: bool,
 ) -> Result<Vec<SrcUpdate>, String> {
+    // One-shot installed map (big speed win)
+    let installed_map = load_installed_pkgver_map().unwrap_or_else(|e| {
+        // Non-fatal: fall back to "unknown installed", but warn once.
+        log.warn(format!("failed to load installed package list: {e}"));
+        HashMap::new()
+    });
+
     let mut out = Vec::new();
 
     for name in pkgs {
@@ -64,7 +75,9 @@ pub fn plan_src_updates_with_resolved(
         };
 
         let candidate = format!("{name}-{ver}_{rev}");
-        let installed = installed_pkgver(name)?;
+
+        // installed is full pkgver (name-version_rev), if installed
+        let installed = installed_map.get(name).cloned();
 
         if !force {
             if let Some(inst) = installed.as_deref() {
@@ -84,25 +97,61 @@ pub fn plan_src_updates_with_resolved(
     Ok(out)
 }
 
-fn installed_pkgver(pkg: &str) -> Result<Option<String>, String> {
+/// Build a HashMap of installed package name -> pkgver (e.g. "firefox" -> "firefox-147.0_1").
+/// This avoids N process spawns during planning.
+fn load_installed_pkgver_map() -> Result<HashMap<String, String>, String> {
     let out = Command::new("xbps-query")
-        .arg("-p")
-        .arg("pkgver")
-        .arg(pkg)
+        .arg("-l")
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .output()
-        .map_err(|e| format!("failed to run xbps-query: {e}"))?;
+        .map_err(|e| format!("failed to run xbps-query -l: {e}"))?;
 
     if !out.status.success() {
-        return Ok(None);
+        return Err("xbps-query -l failed".to_string());
     }
-    let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
-    if s.is_empty() {
-        Ok(None)
+
+    let text = String::from_utf8_lossy(&out.stdout);
+    let mut map: HashMap<String, String> = HashMap::new();
+
+    // Typical lines look like:
+    // ii  firefox-147.0_1  Mozilla Firefox Web Browser
+    // (status, pkgver, description...)
+    for line in text.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+
+        let mut it = line.split_whitespace();
+        let status = it.next().unwrap_or("");
+        if status != "ii" {
+            continue;
+        }
+
+        let pkgver = match it.next() {
+            Some(v) => v,
+            None => continue,
+        };
+
+        let name = match pkgname_from_pkgver(pkgver) {
+            Some(n) => n,
+            None => continue,
+        };
+
+        map.insert(name, pkgver.to_string());
+    }
+
+    Ok(map)
+}
+
+fn pkgname_from_pkgver(pkgver: &str) -> Option<String> {
+    let (name, ver) = pkgver.rsplit_once('-')?;
+    if ver.chars().next().map(|c| c.is_ascii_digit()).unwrap_or(false) {
+        Some(name.to_string())
     } else {
-        Ok(Some(s))
+        None
     }
 }
 

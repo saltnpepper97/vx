@@ -2,6 +2,7 @@
 // License: MIT
 
 mod app;
+mod cache;
 mod cli;
 mod core;
 mod config;
