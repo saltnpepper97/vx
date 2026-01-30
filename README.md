@@ -26,7 +26,7 @@ Void already has great tools — vx focuses on flow.
 
 ---
 
-WHY vx?
+## Why vx?
 
 Common pain points vx smooths out:
 - remembering which xbps-* command does what
@@ -44,7 +44,7 @@ No hidden magic.
 
 ---
 
-INSTALL
+## Install
 
 Currently vx is built from source.
 
@@ -59,7 +59,7 @@ Optional install:
 
 ---
 
-CONFIGURATION
+## Configuration
 
 vx works with sane defaults but supports overrides.
 
@@ -82,7 +82,7 @@ void-packages can be provided via:
 
 ---
 
-REPO WORKFLOW (XBPS)
+## Repo Workflow (XBPS)
 
 Search repositories:
 
@@ -122,7 +122,7 @@ System upgrade:
 
 ---
 
-SOURCE WORKFLOW (void-packages / xbps-src)
+## Source Workflow (void-packages / xbps-src)
 
 Search source packages:
 
@@ -164,7 +164,7 @@ Update source packages:
 
 ---
 
-MANAGED SOURCE PACKAGES
+## Managed Source Package
 
 When you install a package via:
 
@@ -181,7 +181,7 @@ So you only rebuild the source packages you actually care about.
 
 ---
 
-SAFETY / GUARDRAILS
+## Safety / Guardrails
 
 vx avoids ambiguous or destructive combinations.
 
@@ -195,15 +195,15 @@ vx prefers explicit intent.
 
 ---
 
-PHILOSOPHY / NON-GOALS
+## Philosophy / Non-Goals
 
-vx is NOT:
+### vx is NOT:
 - a replacement for XBPS
 - a distro layer
 - an AUR helper clone
 - a wrapper that hides what it’s doing
 
-vx IS:
+### vx IS:
 - a thin, honest front door
 - fast to type
 - easy to remember
@@ -211,7 +211,7 @@ vx IS:
 
 ---
 
-NEAR-TERM ROADMAP
+## Near-term Roadmap
 
 High-value, low-bloat goals:
 - improved search formatting
@@ -222,7 +222,7 @@ High-value, low-bloat goals:
 
 ---
 
-CONTRIBUTING
+## Contributing
 
 Issues and PRs welcome.
 
@@ -235,7 +235,7 @@ For bug reports, include:
 
 ---
 
-LICENSE
+## License
 
 MIT
 
