@@ -61,16 +61,6 @@ pub fn pkg_new(
 }
 
 /// vx pkg <name> --gensum
-///
-/// Behavior:
-/// - reads template before
-/// - runs `xgensum -i` (plus optional flags)
-/// - reads template after
-/// - if unchanged -> prints "checksum unchanged (same version)"
-/// - else -> "updated checksum(s) in template"
-///
-/// We delegate to xtools xgensum because it correctly understands Void templates,
-/// multiple distfiles, hostdir layout, arch selection, and fetch rules.
 pub fn pkg_gensum(
     log: &Log,
     voidpkgs_override: Option<PathBuf>,
@@ -117,8 +107,6 @@ pub fn pkg_gensum(
         }
     };
 
-    // Build xgensum args:
-    // - We always want in-place update when it changes, so we always pass -i.
     let mut args: Vec<String> = Vec::new();
     args.push("-i".to_string());
 
@@ -141,7 +129,6 @@ pub fn pkg_gensum(
         }
     }
 
-    // xgensum accepts templates...; we pass the package name (it resolves srcpkgs/<pkg>/template)
     args.push(pkg.to_string());
 
     if log.verbose && !log.quiet {
@@ -196,14 +183,12 @@ fn resolve_voidpkgs_path(
     voidpkgs_override: Option<PathBuf>,
     cfg: Option<&Config>,
 ) -> Result<PathBuf, String> {
-    // 1) CLI override
     if let Some(p) = voidpkgs_override {
         if !p.as_os_str().is_empty() {
             return Ok(p);
         }
     }
 
-    // 2) env var
     if let Ok(v) = env::var("VX_VOIDPKGS") {
         let p = PathBuf::from(v);
         if !p.as_os_str().is_empty() {
@@ -211,7 +196,6 @@ fn resolve_voidpkgs_path(
         }
     }
 
-    // 3) config (Option<PathBuf>)
     if let Some(c) = cfg {
         if let Some(p) = &c.void_packages_path {
             if !p.as_os_str().is_empty() {

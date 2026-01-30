@@ -45,7 +45,6 @@ pub fn dispatch(log: &Log, cli: Cli, cfg: Option<Config>) -> ExitCode {
                     };
 
                     if sys_plan.is_empty() {
-                        // keep existing behavior for system-only
                         log.info("already up to date.");
                         return ExitCode::SUCCESS;
                     }
@@ -60,12 +59,7 @@ pub fn dispatch(log: &Log, cli: Cli, cfg: Option<Config>) -> ExitCode {
                 return xbps::up_with_yes(log, cfg.as_ref(), yes);
             }
 
-            // vx up -a (system + source):
-            // Do the real checks up front, but keep them QUIET (no git pull chatter).
-            //
-            // IMPORTANT: system planning MUST include a repo sync step, otherwise you get exactly
-            // the behavior you showed: `vx up -a` claims nothing, but a later `vx up` (which syncs)
-            // discovers updates. plan_system_updates() now syncs repos quietly before planning.
+            // vx up -a (system + source)
             let sys_plan = match xbps::plan_system_updates(log, cfg.as_ref()) {
                 Ok(v) => v,
                 Err(e) => {
@@ -88,10 +82,8 @@ pub fn dispatch(log: &Log, cli: Cli, cfg: Option<Config>) -> ExitCode {
                 }
             };
 
-            // Always show a single summary block.
             source::print_up_all_summary(log, &sys_plan, &src_plan);
 
-            // If nothing, DO NOT prompt; print exactly one final line.
             if sys_plan.is_empty() && src_plan.is_empty() {
                 if !log.quiet {
                     println!("vx: already up to date.");
@@ -99,7 +91,6 @@ pub fn dispatch(log: &Log, cli: Cli, cfg: Option<Config>) -> ExitCode {
                 return ExitCode::SUCCESS;
             }
 
-            // dry-run stops after listing
             if dry_run {
                 return ExitCode::SUCCESS;
             }
@@ -151,7 +142,9 @@ pub fn dispatch(log: &Log, cli: Cli, cfg: Option<Config>) -> ExitCode {
         } => {
             if let Some(sub) = cmd {
                 match sub {
-                    PkgCmd::New { name } => pkg::pkg_new(log, voidpkgs_override, cfg.as_ref(), &name),
+                    PkgCmd::New { name } => {
+                        pkg::pkg_new(log, voidpkgs_override, cfg.as_ref(), &name)
+                    }
                 }
             } else if gensum {
                 let Some(pkg) = name else {
@@ -175,3 +168,4 @@ pub fn dispatch(log: &Log, cli: Cli, cfg: Option<Config>) -> ExitCode {
         }
     }
 }
+

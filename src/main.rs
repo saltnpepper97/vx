@@ -3,11 +3,11 @@
 
 mod app;
 mod cli;
+mod core;
 mod config;
 mod log;
 mod managed;
 mod paths;
-mod ops;
 
 fn main() -> std::process::ExitCode {
     app::run()

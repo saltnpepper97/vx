@@ -7,9 +7,6 @@ use std::{env, path::PathBuf, process::ExitCode};
 pub fn run_status(_log: &crate::log::Log, cli: &Cli, cfg: Option<&Config>) -> ExitCode {
     println!("version: {}", env!("CARGO_PKG_VERSION"));
 
-    // ------------------------------------------------------------
-    // Config
-    // ------------------------------------------------------------
     match user_config_path() {
         Ok(p) => {
             if p.exists() {
@@ -24,25 +21,18 @@ pub fn run_status(_log: &crate::log::Log, cli: &Cli, cfg: Option<&Config>) -> Ex
         }
     }
 
-    // ------------------------------------------------------------
-    // base
-    // ------------------------------------------------------------
     if let Some(c) = cfg {
         println!("debug: {}", c.debug);
     } else {
         println!("debug: false");
     }
 
-    // ------------------------------------------------------------
-    // void-packages resolution source (cli/env/config)
-    // ------------------------------------------------------------
     let (voidpkgs, source) = resolve_voidpkgs_for_status(cli, cfg);
     match voidpkgs {
         Some(p) => println!("voidpkgs: {} ({})", p.display(), source),
         None => println!("voidpkgs: unset (needed for `vx src ...`)"),
     }
 
-    // void-packages local repo settings
     if let Some(c) = cfg {
         println!(
             "src repo: {} (use_nonfree={})",
@@ -53,9 +43,6 @@ pub fn run_status(_log: &crate::log::Log, cli: &Cli, cfg: Option<&Config>) -> Ex
         println!("src repo: hostdir/binpkgs (use_nonfree=true)");
     }
 
-    // ------------------------------------------------------------
-    // Managed src list
-    // ------------------------------------------------------------
     match managed::load_managed() {
         Ok(list) => {
             println!("managed: {} package(s)", list.len());
@@ -73,23 +60,18 @@ pub fn run_status(_log: &crate::log::Log, cli: &Cli, cfg: Option<&Config>) -> Ex
         }
     }
 
-    // ------------------------------------------------------------
-    // Flags
-    // ------------------------------------------------------------
     println!("flags: quiet={} verbose={}", cli.quiet, cli.verbose);
 
     ExitCode::SUCCESS
 }
 
 fn resolve_voidpkgs_for_status(cli: &Cli, cfg: Option<&Config>) -> (Option<PathBuf>, &'static str) {
-    // 1) CLI override
     if let Some(p) = &cli.voidpkgs {
         if !p.as_os_str().is_empty() {
             return (Some(p.clone()), "cli");
         }
     }
 
-    // 2) env var
     if let Ok(v) = env::var("VX_VOIDPKGS") {
         let p = PathBuf::from(v);
         if !p.as_os_str().is_empty() {
@@ -97,7 +79,6 @@ fn resolve_voidpkgs_for_status(cli: &Cli, cfg: Option<&Config>) -> (Option<PathB
         }
     }
 
-    // 3) config
     if let Some(c) = cfg {
         if let Some(p) = &c.void_packages_path {
             if !p.as_os_str().is_empty() {

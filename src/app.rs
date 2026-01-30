@@ -22,6 +22,6 @@ pub fn run() -> ExitCode {
         }
     };
 
-    crate::ops::dispatch(&log, cli, cfg)
+    crate::core::dispatch(&log, cli, cfg)
 }
 
