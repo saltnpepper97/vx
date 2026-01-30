@@ -468,48 +468,134 @@ fn sync_voidpkgs(log: &Log, voidpkgs: &Path) -> Result<(), String> {
         ));
     }
 
-    if log.verbose && !log.quiet {
-        log.exec(format!("(cd {}) && git pull --ff-only", voidpkgs.display()));
-    }
+    // Helper: run git, quiet by default (capture stdout/stderr), inherit in verbose.
+    fn run_git(log: &Log, repo: &Path, args: &[&str]) -> Result<(), String> {
+        if log.verbose && !log.quiet {
+            let mut s = String::from("(cd ");
+            s.push_str(&repo.display().to_string());
+            s.push_str(") && git");
+            for a in args {
+                s.push(' ');
+                s.push_str(a);
+            }
+            log.exec(s);
 
-    // Quiet by default: capture output so git can't print "Already up to date."
-    let mut cmd = Command::new("git");
-    cmd.current_dir(voidpkgs).args(["pull", "--ff-only"]);
-    cmd.stdin(Stdio::null());
+            let st = Command::new("git")
+                .current_dir(repo)
+                .args(args)
+                .stdin(Stdio::null())
+                .stdout(Stdio::inherit())
+                .stderr(Stdio::inherit())
+                .status()
+                .map_err(|e| format!("failed to run git {}: {e}", args.join(" ")))?;
 
-    if log.verbose && !log.quiet {
-        cmd.stdout(Stdio::inherit());
-        cmd.stderr(Stdio::inherit());
-
-        let st = cmd
-            .status()
-            .map_err(|e| format!("failed to run git pull: {e}"))?;
-
-        return if st.success() {
-            Ok(())
+            if st.success() {
+                Ok(())
+            } else {
+                Err(format!("git {} failed in {}", args.join(" "), repo.display()))
+            }
         } else {
-            Err(format!("git pull failed in {}", voidpkgs.display()))
-        };
-    }
+            let out = Command::new("git")
+                .current_dir(repo)
+                .args(args)
+                .stdin(Stdio::null())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .output()
+                .map_err(|e| format!("failed to run git {}: {e}", args.join(" ")))?;
 
-    // Non-verbose: capture and suppress, but still surface errors.
-    cmd.stdout(Stdio::piped());
-    cmd.stderr(Stdio::piped());
-
-    let out = cmd
-        .output()
-        .map_err(|e| format!("failed to run git pull: {e}"))?;
-
-    if out.status.success() {
-        Ok(())
-    } else {
-        let err = String::from_utf8_lossy(&out.stderr).trim().to_string();
-        if err.is_empty() {
-            Err(format!("git pull failed in {}", voidpkgs.display()))
-        } else {
-            Err(format!("git pull failed in {}: {}", voidpkgs.display(), err))
+            if out.status.success() {
+                Ok(())
+            } else {
+                let err = String::from_utf8_lossy(&out.stderr).trim().to_string();
+                if err.is_empty() {
+                    Err(format!("git {} failed in {}", args.join(" "), repo.display()))
+                } else {
+                    Err(format!(
+                        "git {} failed in {}: {}",
+                        args.join(" "),
+                        repo.display(),
+                        err
+                    ))
+                }
+            }
         }
     }
+
+    fn git_stdout_trim(repo: &Path, args: &[&str]) -> Result<String, String> {
+        let out = Command::new("git")
+            .current_dir(repo)
+            .args(args)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .output()
+            .map_err(|e| format!("failed to run git {}: {e}", args.join(" ")))?;
+
+        if out.status.success() {
+            Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+        } else {
+            let err = String::from_utf8_lossy(&out.stderr).trim().to_string();
+            if err.is_empty() {
+                Err(format!("git {} failed in {}", args.join(" "), repo.display()))
+            } else {
+                Err(format!(
+                    "git {} failed in {}: {}",
+                    args.join(" "),
+                    repo.display(),
+                    err
+                ))
+            }
+        }
+    }
+
+    // Prefer upstream sync if remote "upstream" exists; fallback to origin pull.
+    let has_upstream = Command::new("git")
+        .current_dir(voidpkgs)
+        .args(["remote", "get-url", "upstream"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+
+    if has_upstream {
+        // fetch upstream
+        run_git(log, voidpkgs, &["fetch", "upstream"])?;
+
+        // current branch
+        let cur_branch = git_stdout_trim(voidpkgs, &["rev-parse", "--abbrev-ref", "HEAD"])
+            .unwrap_or_else(|_| "master".to_string());
+
+        // Try ff-only merge from upstream/<branch>, then upstream/master, then upstream/main.
+        let candidates = [
+            format!("upstream/{}", cur_branch),
+            "upstream/master".to_string(),
+            "upstream/main".to_string(),
+        ];
+
+        let mut last_err: Option<String> = None;
+        for r in &candidates {
+            match run_git(log, voidpkgs, &["merge", "--ff-only", r]) {
+                Ok(()) => return Ok(()),
+                Err(e) => last_err = Some(e),
+            }
+        }
+
+        return Err(last_err.unwrap_or_else(|| {
+            format!(
+                "failed to fast-forward {} from upstream (tried: {}, {}, {})",
+                voidpkgs.display(),
+                candidates[0],
+                candidates[1],
+                candidates[2]
+            )
+        }));
+    }
+
+    // No upstream remote: fallback to origin fast-forward pull.
+    run_git(log, voidpkgs, &["pull", "--ff-only"])
 }
 
 fn add_from_local_repo(
@@ -729,4 +815,3 @@ fn print_src_plan_summary(log: &Log, plan: &[SrcUpdate]) {
         println!("  {}  {} → {}", p.name, from, p.candidate);
     }
 }
-

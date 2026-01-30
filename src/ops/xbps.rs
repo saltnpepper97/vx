@@ -104,41 +104,79 @@ pub fn up_with_yes(log: &Log, _cfg: Option<&Config>, yes: bool) -> ExitCode {
 
 /// Dry-run system update and parse versions.
 ///
-/// Uses: sudo xbps-install -Sun
+/// Key behavior change:
+/// - We *always* sync repositories first (like `xbps-install -Su` would),
+///   then we run a dry-run update plan without syncing again.
+/// This ensures `vx up -a` sees the same available updates that `vx up` would.
 ///
-/// NOTE: xbps may output either:
-///  (A) a human table:
+/// Uses:
+///   1) sudo xbps-install -S
+///   2) sudo xbps-install -un
+///
+/// Parsing supports:
+///  (A) human table:
 ///      Name Action Version New version Download size
-///  (B) a column-ish plan with pkgver first:
+///  (B) column-ish plan with pkgver first:
 ///      <pkgver> <action> <arch> <repo> ...
-///
-/// We parse BOTH.
 ///
 /// IMPORTANT: We disable colors + strip ANSI so parsing doesn't silently break.
 pub fn plan_system_updates(log: &Log, _cfg: Option<&Config>) -> Result<Vec<SysUpdate>, String> {
+    // 1) Sync repodata first so the plan is current (this is what you were missing).
+    {
+        let mut sync = Command::new("sudo");
+        sync.arg("xbps-install");
+        sync.args(["-S"]);
+        sync.env("XBPS_COLORS", "0");
+        sync.stdin(Stdio::inherit()); // allow sudo prompt
+        sync.stdout(Stdio::piped());
+        sync.stderr(Stdio::piped());
+
+        if log.verbose && !log.quiet {
+            log.exec("sudo xbps-install -S".to_string());
+        }
+
+        let out = sync
+            .output()
+            .map_err(|e| format!("failed to run xbps-install -S: {e}"))?;
+
+        if !out.status.success() {
+            let err = String::from_utf8_lossy(&out.stderr).trim().to_string();
+            if err.is_empty() {
+                return Err(format!(
+                    "xbps-install -S failed (exit={})",
+                    out.status.code().unwrap_or(1)
+                ));
+            }
+            return Err(format!("xbps-install -S failed: {err}"));
+        }
+    }
+
+    // 2) Now produce a dry-run update plan based on freshly synced repodata.
     let mut cmd = Command::new("sudo");
     cmd.arg("xbps-install");
-    cmd.args(["-Sun"]);
+    cmd.args(["-un"]); // dry-run update plan (no -S here; we already synced)
     cmd.env("XBPS_COLORS", "0"); // avoid ANSI output that can break parsing
     cmd.stdin(Stdio::inherit()); // allow sudo prompt
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::piped());
 
-    log.exec("sudo xbps-install -Sun".to_string());
+    if log.verbose && !log.quiet {
+        log.exec("sudo xbps-install -un".to_string());
+    }
 
     let out = cmd
         .output()
-        .map_err(|e| format!("failed to run xbps-install -Sun: {e}"))?;
+        .map_err(|e| format!("failed to run xbps-install -un: {e}"))?;
 
     if !out.status.success() {
         let err = String::from_utf8_lossy(&out.stderr).trim().to_string();
         if err.is_empty() {
             return Err(format!(
-                "xbps-install -Sun failed (exit={})",
+                "xbps-install -un failed (exit={})",
                 out.status.code().unwrap_or(1)
             ));
         }
-        return Err(format!("xbps-install -Sun failed: {err}"));
+        return Err(format!("xbps-install -un failed: {err}"));
     }
 
     let text = format!(
@@ -154,11 +192,13 @@ pub fn plan_system_updates(log: &Log, _cfg: Option<&Config>) -> Result<Vec<SysUp
     if plan.is_empty()
         && (text.contains("Name")
             && text.contains("Action")
-            && text.contains("Version")
-            && text.contains("New"))
+            && (text.contains("Version") || text.contains("Current"))
+            && (text.contains("New") || text.contains("New version")))
     {
-        return Err("failed to parse xbps -Sun output (format changed); refusing to report empty plan"
-            .to_string());
+        return Err(
+            "failed to parse xbps dry-run output (format changed); refusing to report empty plan"
+                .to_string(),
+        );
     }
 
     Ok(plan)
@@ -303,7 +343,7 @@ fn run_remove_cmd(log: &Log, opts: &[&str], args: &[String], yes: bool) -> ExitC
     }
 }
 
-/// Parse `xbps-install -Sun` output.
+/// Parse `xbps-install -Sun` (or `-un`) output.
 ///
 /// Supports:
 ///  A) table format:
@@ -316,11 +356,18 @@ fn parse_xbps_sun_plan(text: &str) -> Result<Vec<SysUpdate>, String> {
     let mut out: Vec<SysUpdate> = Vec::new();
 
     let mut in_table = false;
+    let mut saw_table_row = false;
 
     for raw in text.lines() {
         let line = raw.trim();
+
+        // Keep table mode across an empty spacer line *right after* the header.
         if line.is_empty() {
+            if in_table && !saw_table_row {
+                continue;
+            }
             in_table = false;
+            saw_table_row = false;
             continue;
         }
 
@@ -337,13 +384,14 @@ fn parse_xbps_sun_plan(text: &str) -> Result<Vec<SysUpdate>, String> {
             continue;
         }
 
-        // Detect the human table header
+        // Detect the human table header (xbps has a couple variations)
         if line.starts_with("Name")
             && line.contains("Action")
-            && line.contains("Version")
-            && line.contains("New")
+            && (line.contains("Version") || line.contains("Current"))
+            && (line.contains("New") || line.contains("New version"))
         {
             in_table = true;
+            saw_table_row = false;
             continue;
         }
 
@@ -363,6 +411,7 @@ fn parse_xbps_sun_plan(text: &str) -> Result<Vec<SysUpdate>, String> {
                 continue;
             }
 
+            // "Version" then "New version" are expected as cols[2] and cols[3]
             let oldver = cols[2];
             let newver = cols[3];
 
@@ -370,6 +419,7 @@ fn parse_xbps_sun_plan(text: &str) -> Result<Vec<SysUpdate>, String> {
             let to = format!("{name}-{newver}");
 
             out.push(SysUpdate { name, from, to });
+            saw_table_row = true;
             continue;
         }
 

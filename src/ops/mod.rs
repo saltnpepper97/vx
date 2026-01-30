@@ -62,6 +62,10 @@ pub fn dispatch(log: &Log, cli: Cli, cfg: Option<Config>) -> ExitCode {
 
             // vx up -a (system + source):
             // Do the real checks up front, but keep them QUIET (no git pull chatter).
+            //
+            // IMPORTANT: system planning MUST include a repo sync step, otherwise you get exactly
+            // the behavior you showed: `vx up -a` claims nothing, but a later `vx up` (which syncs)
+            // discovers updates. plan_system_updates() now syncs repos quietly before planning.
             let sys_plan = match xbps::plan_system_updates(log, cfg.as_ref()) {
                 Ok(v) => v,
                 Err(e) => {
@@ -171,4 +175,3 @@ pub fn dispatch(log: &Log, cli: Cli, cfg: Option<Config>) -> ExitCode {
         }
     }
 }
-
