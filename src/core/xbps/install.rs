@@ -1,7 +1,7 @@
 // Author Dustin Pilgrim
 // License: MIT
 
-use crate::{config::Config, log::Log};
+use crate::{config::Config, log::Log, managed};
 use std::process::{Command, ExitCode, Stdio};
 
 use super::query;
@@ -55,7 +55,47 @@ pub fn rm(log: &Log, _cfg: Option<&Config>, yes: bool, pkgs: &[String]) -> ExitC
         return ExitCode::SUCCESS;
     }
 
-    run_remove_cmd(log, &[], &to_remove, yes)
+    // Determine which of these are also tracked as vx-managed src packages.
+    // Non-fatal: removal should still work even if the manifest is missing/broken.
+    let managed_list = match managed::load_managed() {
+        Ok(v) => v,
+        Err(e) => {
+            log.warn(format!("failed to read managed-src list: {e}"));
+            Vec::new()
+        }
+    };
+
+    let mut to_untrack: Vec<String> = Vec::new();
+    if !managed_list.is_empty() {
+        for p in &to_remove {
+            if managed_list.iter().any(|m| m == p) {
+                to_untrack.push(p.clone());
+            }
+        }
+    }
+
+    // Remove packages first. Only untrack if removal succeeds.
+    let code = run_remove_cmd(log, &[], &to_remove, yes);
+    if code != ExitCode::SUCCESS {
+        return code;
+    }
+
+    // New behavior:
+    // If you removed a package that vx was also tracking as a source pkg,
+    // automatically untrack it too (no prompt).
+    if !to_untrack.is_empty() {
+        if let Err(e) = managed::remove_managed(&to_untrack) {
+            log.warn(format!("failed to update managed-src list: {e}"));
+        } else if !log.quiet {
+            if to_untrack.len() == 1 {
+                log.info(format!("untracked source package '{}'.", to_untrack[0]));
+            } else {
+                log.info(format!("untracked {} source packages.", to_untrack.len()));
+            }
+        }
+    }
+
+    ExitCode::SUCCESS
 }
 
 pub fn up_with_yes(log: &Log, _cfg: Option<&Config>, yes: bool) -> ExitCode {
@@ -137,4 +177,3 @@ fn run_remove_cmd(log: &Log, opts: &[&str], args: &[String], yes: bool) -> ExitC
         }
     }
 }
-

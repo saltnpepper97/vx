@@ -37,7 +37,8 @@ pub fn dispatch(log: &Log, cli: Cli, cfg: Option<Config>) -> ExitCode {
             // vx up (system only)
             if !all {
                 if dry_run {
-                    let sys_plan = match xbps::plan_system_updates(log, cfg.as_ref()) {
+                    // For dry-run, we want a reliable "find updates" result, not TTL-stale output.
+                    let sys_plan = match xbps::plan_system_updates_fresh(log, cfg.as_ref()) {
                         Ok(v) => v,
                         Err(e) => {
                             log.error(e);
@@ -61,7 +62,10 @@ pub fn dispatch(log: &Log, cli: Cli, cfg: Option<Config>) -> ExitCode {
             }
 
             // vx up -a (system + source)
-            let sys_plan = match xbps::plan_system_updates(log, cfg.as_ref()) {
+            //
+            // IMPORTANT: this must reliably "find updates" for system without requiring a prior `vx up`.
+            // So we force a repodata sync before planning.
+            let sys_plan = match xbps::plan_system_updates_fresh(log, cfg.as_ref()) {
                 Ok(v) => v,
                 Err(e) => {
                     log.error(e);

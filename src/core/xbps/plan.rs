@@ -13,18 +13,24 @@ pub struct SysUpdate {
     pub to: String,
 }
 
-/// Dry-run system update and parse versions.
+/// Like `plan_system_updates`, but ALWAYS syncs repodata first.
 ///
-/// Performance behavior:
-/// - `xbps-install -S` is cached with a TTL (default 10m).
-/// - Always runs `xbps-install -un` to produce the plan.
-/// - Set VX_FRESH=1 to force a resync, or VX_SYNC_TTL_SECS to override TTL.
-pub fn plan_system_updates(log: &Log, _cfg: Option<&Config>) -> Result<Vec<SysUpdate>, String> {
+/// This is what you want for commands that must *reliably* "find updates",
+/// e.g. `vx up -a` and `vx up -n`, where planning must not depend on TTL cache.
+pub fn plan_system_updates_fresh(log: &Log, cfg: Option<&Config>) -> Result<Vec<SysUpdate>, String> {
+    plan_system_updates_inner(log, cfg, true)
+}
+
+fn plan_system_updates_inner(
+    log: &Log,
+    _cfg: Option<&Config>,
+    force_sync: bool,
+) -> Result<Vec<SysUpdate>, String> {
     let ttl = cache::sync_ttl_secs();
     let cache_key = "xbps.repodata.sync";
 
-    // 1) Sync repodata if needed
-    if !cache::is_fresh(cache_key, ttl) {
+    // 1) Sync repodata if needed (or forced)
+    if force_sync || !cache::is_fresh(cache_key, ttl) {
         let mut sync = Command::new("sudo");
         sync.arg("xbps-install");
         sync.args(["-S"]);
@@ -34,7 +40,11 @@ pub fn plan_system_updates(log: &Log, _cfg: Option<&Config>) -> Result<Vec<SysUp
         sync.stderr(Stdio::piped());
 
         if log.verbose && !log.quiet {
-            log.exec("sudo xbps-install -S".to_string());
+            if force_sync {
+                log.exec("sudo xbps-install -S (forced)".to_string());
+            } else {
+                log.exec("sudo xbps-install -S".to_string());
+            }
         }
 
         let out = sync

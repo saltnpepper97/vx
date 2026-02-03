@@ -20,9 +20,7 @@ pub fn load_managed() -> Result<Vec<String>, String> {
         .map_err(|e| format!("failed to parse {}: {e}", path.display()))?;
 
     // Expect: packages ["a" "b" ...]
-    let pkgs: Vec<String> = cfg
-        .get("packages")
-        .unwrap_or_else(|_| Vec::new());
+    let pkgs: Vec<String> = cfg.get("packages").unwrap_or_else(|_| Vec::new());
 
     Ok(dedupe_sorted(pkgs))
 }
@@ -35,6 +33,40 @@ pub fn add_managed(pkgs: &[String]) -> Result<(), String> {
     let merged = dedupe_sorted(existing);
 
     write_manifest(&path, &merged).map_err(|e| format!("failed to write {}: {e}", path.display()))
+}
+
+/// Remove packages from the vx-managed src list.
+/// This is a no-op if the manifest doesn't exist or none of the packages are present.
+pub fn remove_managed(pkgs: &[String]) -> Result<(), String> {
+    let path = managed_src_path()?;
+    if !path.exists() {
+        return Ok(());
+    }
+
+    let mut existing = load_managed()?;
+    if existing.is_empty() {
+        return Ok(());
+    }
+
+    let mut rmset: BTreeSet<String> = BTreeSet::new();
+    for p in pkgs {
+        let t = p.trim();
+        if !t.is_empty() {
+            rmset.insert(t.to_string());
+        }
+    }
+
+    let before = existing.len();
+
+    // Compare using trimmed entries so weird whitespace in the manifest can't block removals.
+    existing.retain(|p| !rmset.contains(p.trim()));
+
+    if existing.len() == before {
+        return Ok(());
+    }
+
+    write_manifest(&path, &existing)
+        .map_err(|e| format!("failed to write {}: {e}", path.display()))
 }
 
 fn dedupe_sorted(mut pkgs: Vec<String>) -> Vec<String> {
@@ -70,4 +102,3 @@ fn write_manifest(path: &Path, pkgs: &[String]) -> io::Result<()> {
 fn escape_string(s: &str) -> String {
     s.replace('\\', "\\\\").replace('"', "\\\"")
 }
-

@@ -9,7 +9,7 @@ mod parse;
 mod plan;
 mod query;
 
-pub use plan::{plan_system_updates, SysUpdate};
+pub use plan::{plan_system_updates_fresh, SysUpdate};
 
 pub fn search(log: &Log, cfg: Option<&Config>, installed: bool, term: &[String]) -> ExitCode {
     query::search(log, cfg, installed, term)
