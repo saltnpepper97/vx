@@ -25,11 +25,14 @@ pub fn plan_src_updates(
     cfg: Option<&Config>,
     pkgs_override: Option<Vec<String>>,
     force: bool,
+    remote: bool,
 ) -> Result<Vec<SrcUpdate>, String> {
     let resolved = resolve_voidpkgs(voidpkgs_override, cfg)?;
 
-    // fetch (TTL cached)
-    git::sync_voidpkgs(log, &resolved.voidpkgs)?;
+    // Only need upstream refs for remote planning.
+    if remote {
+        git::sync_voidpkgs(log, &resolved.voidpkgs)?;
+    }
 
     let target = if let Some(pkgs) = pkgs_override {
         pkgs
@@ -41,7 +44,7 @@ pub fn plan_src_updates(
         return Ok(Vec::new());
     }
 
-    plan_src_updates_with_resolved(log, &resolved, &target, force)
+    plan_src_updates_with_resolved(log, &resolved, &target, force, remote)
 }
 
 pub fn plan_src_updates_with_resolved(
@@ -49,6 +52,7 @@ pub fn plan_src_updates_with_resolved(
     res: &SrcResolved,
     pkgs: &[String],
     force: bool,
+    remote: bool,
 ) -> Result<Vec<SrcUpdate>, String> {
     // One-shot installed map (speed win)
     let installed_map = load_installed_pkgver_map().unwrap_or_else(|e| {
@@ -59,32 +63,52 @@ pub fn plan_src_updates_with_resolved(
     let mut out = Vec::new();
 
     for name in pkgs {
-        // Prefer upstream template (Option B)
-        let upstream_tpl = match git::read_template_upstream(&res.voidpkgs, name) {
-            Ok(s) => Some(s),
-            Err(_) => None,
-        };
+        let local_tpl = res
+            .voidpkgs
+            .join("srcpkgs")
+            .join(name)
+            .join("template");
 
-        let (ver, rev) = if let Some(text) = upstream_tpl {
-            match parse_template_version_revision_str(&text) {
-                Ok(v) => v,
-                Err(e) => {
-                    log.warn(format!("{name}: upstream template parse failed: {e}"));
-                    continue;
+        let (ver, rev) = if remote {
+            // Remote mode:
+            // - Prefer upstream template
+            // - If upstream missing (fork-only pkg), fall back to local silently (if exists)
+            match git::read_template_upstream(&res.voidpkgs, name) {
+                Ok(text) => match parse_template_version_revision_str(&text) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        log.warn(format!("{name}: upstream template parse failed: {e}"));
+                        continue;
+                    }
+                },
+                Err(_) => {
+                    // Upstream doesn't have it (or cannot read it). If local exists, use it
+                    // without warning (common for fork-only packages like stasis-git).
+                    if local_tpl.is_file() {
+                        match parse_template_version_revision_file(&local_tpl) {
+                            Ok(v) => v,
+                            Err(e) => {
+                                log.warn(format!("{name}: {e}"));
+                                continue;
+                            }
+                        }
+                    } else {
+                        log.warn(format!(
+                            "{name}: not found in upstream/master and no local template at {}",
+                            local_tpl.display()
+                        ));
+                        continue;
+                    }
                 }
             }
         } else {
-            // Fallback: local working tree template
-            let tpl = res
-                .voidpkgs
-                .join("srcpkgs")
-                .join(name)
-                .join("template");
-
-            match parse_template_version_revision_file(&tpl) {
+            // Local mode: ONLY local template.
+            match parse_template_version_revision_file(&local_tpl) {
                 Ok(v) => v,
                 Err(e) => {
-                    log.warn(format!("{name}: {e}"));
+                    log.warn(format!(
+                        "{name}: {e} (local planning; update your checkout or use --remote)"
+                    ));
                     continue;
                 }
             }
@@ -206,4 +230,3 @@ fn unquote(s: &str) -> String {
         s.to_string()
     }
 }
-

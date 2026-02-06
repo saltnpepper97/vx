@@ -37,8 +37,12 @@ pub fn dispatch_src(
         }
     };
 
-    let should_sync = matches!(&cmd, SrcCmd::Up { .. })
-        || matches!(&cmd, SrcCmd::Add { rebuild: true, .. });
+    // Remote mode means "build against upstream worktree" and should NOT mutate/sync
+    // the user's local void-packages checkout.
+    let remote_mode = matches!(&cmd, SrcCmd::Up { remote: true, .. });
+
+    let should_sync = !remote_mode
+        && (matches!(&cmd, SrcCmd::Up { .. }) || matches!(&cmd, SrcCmd::Add { rebuild: true, .. }));
 
     if should_sync {
         if let Err(e) = git::sync_voidpkgs(log, &resolved.voidpkgs) {
@@ -105,7 +109,16 @@ pub fn dispatch_src(
                 return ExitCode::SUCCESS;
             }
 
-            let plan = match plan::plan_src_updates_with_resolved(log, &resolved, &target, force) {
+            // Plan must match build source:
+            // - remote=false => local templates
+            // - remote=true  => upstream/master templates (fallback to local for fork-only packages)
+            let plan = match plan::plan_src_updates_with_resolved(
+                log,
+                &resolved,
+                &target,
+                force,
+                remote,
+            ) {
                 Ok(v) => v,
                 Err(e) => {
                     log.error(e);
@@ -145,4 +158,3 @@ pub fn print_up_all_summary(log: &Log, sys: &[SysUpdate], src: &[SrcUpdate]) {
 pub fn confirm_once(prompt: &str) -> bool {
     util::confirm_once(prompt)
 }
-

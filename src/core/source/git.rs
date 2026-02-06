@@ -117,6 +117,28 @@ pub fn sync_voidpkgs(log: &Log, voidpkgs: &Path) -> Result<(), String> {
     }
 }
 
+/// Check if upstream/master contains srcpkgs/<pkg>/template.
+///
+/// Used so remote builds only overlay fork-only packages by default.
+pub fn upstream_has_template(voidpkgs: &Path, pkg: &str) -> bool {
+    let pkg = pkg.trim();
+    if pkg.is_empty() {
+        return false;
+    }
+
+    let spec = format!("{UPSTREAM_REF}:srcpkgs/{pkg}/template");
+
+    Command::new("git")
+        .current_dir(voidpkgs)
+        .args(["cat-file", "-e", &spec])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
+
 /// Read an upstream template without checking anything out.
 ///
 /// Equivalent to:
@@ -205,15 +227,11 @@ pub fn ensure_upstream_worktree(log: &Log, voidpkgs: &Path) -> Result<PathBuf, S
             .map_err(|e| format!("failed to run git worktree add: {e}"))?;
 
         if !out.success() {
-            return Err(format!(
-                "git worktree add failed for {}",
-                wt.display()
-            ));
+            return Err(format!("git worktree add failed for {}", wt.display()));
         }
     }
 
-    // Make sure the worktree is exactly at upstream/master and clean.
-    // (Detached worktree can be safely reset; it's vx-owned.)
+    // Reset + clean.
     if log.verbose && !log.quiet {
         log.exec(format!(
             "(cd {}) && git reset --hard {}",
@@ -274,4 +292,3 @@ pub fn ensure_upstream_worktree(log: &Log, voidpkgs: &Path) -> Result<PathBuf, S
 
     Ok(wt)
 }
-
