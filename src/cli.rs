@@ -8,9 +8,10 @@ use std::path::PathBuf;
 #[command(
     name = "vx",
     version,
-    about = "Unified Void package front door (xbps + void-packages)",
-    long_about = "vx wraps xbps tools and (optionally) void-packages.\n\n\
-                  For `vx src ...` and `vx pkg ...` you must provide a void-packages path via:\n\
+    about = "Void Linux package manager front-end",
+    long_about = "vx wraps xbps and xbps-src into a single intuitive tool.\n\n\
+                  Think pacman/apt feel for daily Void Linux usage.\n\n\
+                  For `vx src` commands, provide a void-packages path via:\n\
                   - --voidpkgs /path/to/void-packages\n\
                   - VX_VOIDPKGS=/path/to/void-packages\n\
                   - ~/.config/vx/vx.rune (void_packages.path)\n"
@@ -24,7 +25,7 @@ pub struct Cli {
     #[arg(short = 'v', long, global = true)]
     pub verbose: bool,
 
-    /// Override void-packages path for `vx src ...` and `vx pkg ...`
+    /// Override void-packages path.
     #[arg(long, global = true, value_name = "PATH")]
     pub voidpkgs: Option<PathBuf>,
 
@@ -34,43 +35,42 @@ pub struct Cli {
 
 #[derive(Subcommand, Debug)]
 pub enum Cmd {
-    /// Show VX status (config + void-packages resolution info)
+    /// Show vx status (config + void-packages info).
     Status,
 
-    /// Search packages.
-    ///
-    /// Default searches repos (xbps-query -Rs).
-    /// Use -i/--installed to search installed packages (xbps-query -s).
+    /// Search available packages (xbps-query -Rs).
     Search {
-        /// Search installed packages instead of repositories.
-        #[arg(short = 'i', long)]
-        installed: bool,
-
-        /// Search term (one or more words).
+        /// Search term.
         term: Vec<String>,
     },
 
-    /// Show repo package info (xbps-query -R)
+    /// Show package information (xbps-query -R).
     Info {
         /// Package name.
         pkg: String,
     },
 
-    /// List installed files for a package (xbps-query -f)
+    /// List installed files for a package (xbps-query -f).
     Files {
         /// Package name.
         pkg: String,
     },
 
-    /// Find which installed package owns a path (xbps-query -o)
-    Provides {
-        /// Path to check (installed file path).
+    /// List installed packages (xbps-query -l).
+    List {
+        /// Filter by name substring.
+        term: Option<String>,
+    },
+
+    /// Find which package owns a path (xbps-query -o).
+    Owns {
+        /// Path to check.
         path: String,
     },
 
-    /// Install packages (xbps-install).
+    /// Install packages from repositories (xbps-install).
     Add {
-        /// Assume yes for xbps prompts (-y).
+        /// Assume yes.
         #[arg(short = 'y', long, aliases = ["no-confirm", "noconfirm"])]
         yes: bool,
 
@@ -80,20 +80,24 @@ pub enum Cmd {
 
     /// Remove packages (xbps-remove).
     Rm {
-        /// Assume yes for xbps prompts (-y).
+        /// Assume yes.
         #[arg(short = 'y', long, aliases = ["no-confirm", "noconfirm"])]
         yes: bool,
+
+        /// Also remove orphaned dependencies (-o).
+        #[arg(short = 'o', long)]
+        orphans: bool,
 
         /// Packages to remove.
         pkgs: Vec<String>,
     },
 
-    /// Update the system and/or tracked source packages.
+    /// Update system packages and/or tracked source packages.
     ///
-    /// - Without --all: updates system via xbps-install -Su.
-    /// - With --all: also updates VX-managed source packages via `vx src up --all`.
+    /// Without --all: updates system only (xbps-install -Su).
+    /// With --all: updates system AND all vx-tracked source packages.
     Up {
-        /// Update system + VX-managed source packages.
+        /// Update system + all vx-tracked source packages.
         #[arg(short = 'a', long)]
         all: bool,
 
@@ -101,59 +105,50 @@ pub enum Cmd {
         #[arg(short = 'n', long)]
         dry_run: bool,
 
-        /// For --all, include source packages even if already at candidate version.
+        /// Force rebuild even if already at candidate version.
         #[arg(short = 'f', long)]
         force: bool,
 
-        /// Skip the single confirmation prompt (implies -y when invoking xbps).
+        /// Assume yes.
         #[arg(short = 'y', long, aliases = ["no-confirm", "noconfirm"])]
         yes: bool,
 
-        /// For --all: build source updates from upstream templates via git worktree.
-        ///
-        /// Default is local templates (your current checkout).
-        #[arg(long, alias = "upstream")]
-        remote: bool,
+        /// Build from local checkout instead of upstream (default is upstream).
+        #[arg(long)]
+        local: bool,
     },
 
-    /// void-packages / xbps-src operations (source builds)
+    /// void-packages / xbps-src source build operations.
     Src {
         #[command(subcommand)]
         cmd: SrcCmd,
     },
 
-    /// Packaging helpers (template / checksum workflows)
-    ///
-    /// Examples:
-    ///   vx pkg new foo
-    ///   vx pkg foo --gensum
+    /// Packaging helpers (template workflows).
     Pkg {
-        /// Target package name (used with flags like --gensum)
-        ///
-        /// Example: vx pkg <name> --gensum
+        /// Package name.
         name: Option<String>,
 
-        /// Generate/check/update SHA256 sums in template (like xtools xgensum -i)
+        /// Generate/update SHA256 checksums in template (xgensum -i).
         #[arg(long)]
         gensum: bool,
 
-        /// Force (re-)download of distfiles (xgensum -f)
+        /// Force re-download of distfiles (xgensum -f).
         #[arg(short = 'f', long)]
         force: bool,
 
-        /// Use content checksum (xgensum -c)
+        /// Use content checksum (xgensum -c).
         #[arg(short = 'c', long)]
         content: bool,
 
-        /// Architecture to generate checksum for (xgensum -a)
+        /// Architecture (xgensum -a).
         #[arg(short = 'a', long, value_name = "ARCH")]
         arch: Option<String>,
 
-        /// Absolute path to hostdir (xgensum -H)
+        /// Absolute path to hostdir (xgensum -H).
         #[arg(short = 'H', long, value_name = "PATH")]
         hostdir: Option<PathBuf>,
 
-        /// Subcommands under `vx pkg ...` (e.g., `vx pkg new`)
         #[command(subcommand)]
         cmd: Option<PkgCmd>,
     },
@@ -161,84 +156,93 @@ pub enum Cmd {
 
 #[derive(Subcommand, Debug)]
 pub enum SrcCmd {
-    /// Build one or more source packages (./xbps-src pkg ...)
-    Build { pkgs: Vec<String> },
+    /// Build + install a source package and start tracking it.
+    ///
+    /// Builds from upstream by default. Use --local for your checkout.
+    Add {
+        /// Assume yes.
+        #[arg(short = 'y', long, aliases = ["no-confirm", "noconfirm"])]
+        yes: bool,
 
-    /// Clean build files for one or more source packages (./xbps-src clean ...)
+        /// Build from local checkout instead of upstream.
+        #[arg(long)]
+        local: bool,
+
+        /// Packages to build and install.
+        pkgs: Vec<String>,
+    },
+
+    /// Remove a source-built package and stop tracking it.
+    Rm {
+        /// Assume yes.
+        #[arg(short = 'y', long, aliases = ["no-confirm", "noconfirm"])]
+        yes: bool,
+
+        /// Packages to remove and untrack.
+        pkgs: Vec<String>,
+    },
+
+    /// Rebuild and reinstall tracked source packages.
+    ///
+    /// With no arguments: rebuilds all tracked packages.
+    /// With package names: rebuilds only those packages.
+    ///
+    /// Builds from upstream by default. Use --local for your checkout.
+    Up {
+        /// Show the plan only; do not make changes.
+        #[arg(short = 'n', long)]
+        dry_run: bool,
+
+        /// Force rebuild even if already at candidate version.
+        #[arg(short = 'f', long)]
+        force: bool,
+
+        /// Assume yes.
+        #[arg(short = 'y', long, aliases = ["no-confirm", "noconfirm"])]
+        yes: bool,
+
+        /// Build from local checkout instead of upstream.
+        #[arg(long)]
+        local: bool,
+
+        /// Packages to update (default: all tracked).
+        pkgs: Vec<String>,
+    },
+
+    /// List tracked source packages.
+    List,
+
+    /// Build a source package without installing (./xbps-src pkg).
+    Build {
+        /// Build from local checkout instead of upstream.
+        #[arg(long)]
+        local: bool,
+
+        pkgs: Vec<String>,
+    },
+
+    /// Clean build files (./xbps-src clean).
     Clean { pkgs: Vec<String> },
 
-    /// Lint one or more source packages (./xbps-src lint ...)
+    /// Lint a template (./xbps-src lint).
     Lint { pkgs: Vec<String> },
 
-    /// Search void-packages srcpkgs by name.
-    ///
-    /// Use -i/--installed to only show srcpkgs that are installed on the system.
+    /// Search srcpkgs by name.
     Search {
-        /// Only show matches that are installed on the system.
+        /// Only show packages that are installed.
         #[arg(short = 'i', long)]
         installed: bool,
 
         /// Name substring to search for.
         term: String,
     },
-
-    /// Install built packages from the local repo (or rebuild+install).
-    ///
-    /// Alias: `vx src install ...`
-    #[command(alias = "install")]
-    Add {
-        /// Install even if already installed.
-        #[arg(short = 'f', long)]
-        force: bool,
-
-        /// Rebuild packages (clean+pkg) before installing.
-        #[arg(long)]
-        rebuild: bool,
-
-        /// Assume yes for xbps prompts (-y) when installing built packages.
-        #[arg(short = 'y', long, aliases = ["no-confirm", "noconfirm"])]
-        yes: bool,
-
-        pkgs: Vec<String>,
-    },
-
-    /// Update source packages (clean+pkg, then install from local repo).
-    ///
-    /// Use --all to update the VX-managed list.
-    Up {
-        /// Update the VX-managed source package set.
-        #[arg(short = 'a', long)]
-        all: bool,
-
-        /// Show the plan only; do not make changes.
-        #[arg(short = 'n', long)]
-        dry_run: bool,
-
-        /// Include packages even if already at candidate version.
-        #[arg(short = 'f', long)]
-        force: bool,
-
-        /// Skip the single confirmation prompt (implies -y when invoking xbps).
-        #[arg(short = 'y', long, aliases = ["no-confirm", "noconfirm"])]
-        yes: bool,
-
-        /// Build updates from upstream templates via git worktree.
-        ///
-        /// Default is local templates (your current checkout).
-        #[arg(long, alias = "upstream")]
-        remote: bool,
-
-        /// Packages to update (ignored with --all).
-        pkgs: Vec<String>,
-    },
 }
 
 #[derive(Subcommand, Debug)]
 pub enum PkgCmd {
-    /// Create a new srcpkg skeleton (delegates to xtools `xnew`)
+    /// Create a new template skeleton (xnew).
     New {
-        /// Package name to create under srcpkgs/
+        /// Package name.
         name: String,
     },
 }
-

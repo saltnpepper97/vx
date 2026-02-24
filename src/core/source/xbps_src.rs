@@ -14,40 +14,28 @@ use super::git;
 use super::resolve::SrcResolved;
 
 pub fn build(log: &Log, res: &SrcResolved, pkgs: &[String]) -> ExitCode {
-    if let Err(code) = need_pkgs(log, "vx src build", pkgs) {
-        return code;
-    }
     run_xbps_src(log, &res.voidpkgs, join_args("pkg", pkgs))
 }
 
 pub fn clean(log: &Log, res: &SrcResolved, pkgs: &[String]) -> ExitCode {
-    if let Err(code) = need_pkgs(log, "vx src clean", pkgs) {
-        return code;
-    }
     run_xbps_src(log, &res.voidpkgs, join_args("clean", pkgs))
 }
 
 pub fn lint(log: &Log, res: &SrcResolved, pkgs: &[String]) -> ExitCode {
-    if let Err(code) = need_pkgs(log, "vx src lint", pkgs) {
-        return code;
-    }
     run_xbps_src(log, &res.voidpkgs, join_args("lint", pkgs))
 }
 
-/// Update source packages (clean+pkg), then install from the local repo.
+/// Build + install source packages, then track them in the managed list.
 ///
-/// Behavior:
-/// - remote=false (default): build from your local void-packages checkout.
-/// - remote=true: build from upstream/master via git worktree (does not mutate your branch),
-///   but writes outputs into the main repo hostdir so installs work normally.
-///
-/// Remote automation:
-/// - When remote=true, vx overlays local `srcpkgs/<pkg>` into upstream worktree ONLY when:
-///     * upstream does not contain that package (fork-only), OR
-///     * local contains `srcpkgs/<pkg>/.vx-overlay` marker.
-/// - Also writes `etc/conf` in the build tree so restricted packages build automatically
-///   when `use_nonfree=true`.
+/// - remote=true (default): builds from upstream/master via git worktree.
+///   Does not touch your local branch.
+/// - remote=false (--local): builds from your local void-packages checkout.
 pub fn src_up(log: &Log, res: &SrcResolved, yes: bool, remote: bool, pkgs: &[String]) -> ExitCode {
+    if pkgs.is_empty() {
+        log.error("no packages specified");
+        return ExitCode::from(2);
+    }
+
     let (dir, env) = if remote {
         let wt = match git::ensure_upstream_worktree(log, &res.voidpkgs) {
             Ok(p) => p,
@@ -57,23 +45,22 @@ pub fn src_up(log: &Log, res: &SrcResolved, yes: bool, remote: bool, pkgs: &[Str
             }
         };
 
-        // Ensure etc/conf has XBPS_ALLOW_RESTRICTED when nonfree enabled.
         if let Err(e) = ensure_xbps_conf(log, &wt, res.use_nonfree) {
             log.warn(format!("failed to ensure etc/conf in worktree: {e}"));
         }
 
-        // Overlay fork-only (or explicitly marked) packages into worktree.
         if let Err(e) = overlay_local_srcpkgs(log, &res.voidpkgs, &wt, pkgs) {
-            log.warn(format!("failed to overlay local srcpkgs into upstream worktree: {e}"));
+            log.warn(format!(
+                "failed to overlay local srcpkgs into upstream worktree: {e}"
+            ));
         }
 
         (wt, build_env_for_worktree(res))
     } else {
-        // Local builds: still ensure etc/conf for restricted if desired.
         if let Err(e) = ensure_xbps_conf(log, &res.voidpkgs, res.use_nonfree) {
             log.warn(format!("failed to ensure etc/conf in local repo: {e}"));
         }
-        (res.voidpkgs.clone(), build_env_for_local(res))
+        (res.voidpkgs.clone(), Vec::new())
     };
 
     let c = run_xbps_src_with_env(log, &dir, join_args("clean", pkgs), &env);
@@ -90,23 +77,14 @@ pub fn src_up(log: &Log, res: &SrcResolved, yes: bool, remote: bool, pkgs: &[Str
 
     if c == ExitCode::SUCCESS {
         if let Err(e) = managed::add_managed(&pkgs.to_vec()) {
-            log.warn(format!("failed to update managed-src list: {e}"));
+            log.warn(format!("failed to update managed list: {e}"));
         }
     }
 
     c
 }
 
-fn need_pkgs(log: &Log, usage: &str, pkgs: &[String]) -> Result<(), ExitCode> {
-    if pkgs.is_empty() {
-        log.error(format!("usage: {usage} <pkg> [pkg...]"));
-        Err(ExitCode::from(2))
-    } else {
-        Ok(())
-    }
-}
-
-fn join_args(sub: &str, pkgs: &[String]) -> Vec<OsString> {
+pub fn join_args(sub: &str, pkgs: &[String]) -> Vec<OsString> {
     let mut out = Vec::with_capacity(1 + pkgs.len());
     out.push(OsString::from(sub));
     out.extend(pkgs.iter().cloned().map(OsString::from));
@@ -117,9 +95,7 @@ fn run_xbps_src(log: &Log, voidpkgs: &Path, args: Vec<OsString>) -> ExitCode {
     run_xbps_src_with_env(log, voidpkgs, args, &[])
 }
 
-/// Run xbps-src in a given directory, optionally with extra env vars.
-/// `env` is a list of (key, value) pairs.
-fn run_xbps_src_with_env(
+pub fn run_xbps_src_with_env(
     log: &Log,
     voidpkgs: &Path,
     args: Vec<OsString>,
@@ -139,16 +115,12 @@ fn run_xbps_src_with_env(
             s.push(' ');
             s.push_str(&a.to_string_lossy());
         }
-
         if !env.is_empty() {
             let mut pre = String::new();
             for (k, v) in env {
-                pre.push_str(k);
-                pre.push('=');
-                pre.push_str(v);
-                pre.push(' ');
+                pre.push_str(&format!("{k}={v} "));
             }
-            log.exec(format!("(cd {}) && {}{}", voidpkgs.display(), pre, s));
+            log.exec(format!("(cd {}) && {pre}{s}", voidpkgs.display()));
         } else {
             log.exec(format!("(cd {}) && {}", voidpkgs.display(), s));
         }
@@ -174,9 +146,8 @@ fn run_xbps_src_with_env(
     }
 }
 
-/// Ensure `etc/conf` in the given void-packages tree contains XBPS_ALLOW_RESTRICTED=yes
-/// when allowed=true. This matches xbps-src's own error message expectation.
-fn ensure_xbps_conf(log: &Log, voidpkgs: &Path, allow_restricted: bool) -> Result<(), String> {
+/// Ensure `etc/conf` contains XBPS_ALLOW_RESTRICTED=yes when allow_restricted=true.
+pub fn ensure_xbps_conf(log: &Log, voidpkgs: &Path, allow_restricted: bool) -> Result<(), String> {
     if !allow_restricted {
         return Ok(());
     }
@@ -189,8 +160,8 @@ fn ensure_xbps_conf(log: &Log, voidpkgs: &Path, allow_restricted: bool) -> Resul
 
     let mut needs_write = true;
     if conf.is_file() {
-        let text =
-            fs::read_to_string(&conf).map_err(|e| format!("failed to read {}: {e}", conf.display()))?;
+        let text = fs::read_to_string(&conf)
+            .map_err(|e| format!("failed to read {}: {e}", conf.display()))?;
         if text.lines().any(|l| l.trim() == "XBPS_ALLOW_RESTRICTED=yes") {
             needs_write = false;
         }
@@ -217,11 +188,7 @@ fn ensure_xbps_conf(log: &Log, voidpkgs: &Path, allow_restricted: bool) -> Resul
     Ok(())
 }
 
-/// Compute env vars to ensure worktree builds write into the main repo's hostdir/distfiles.
-fn build_env_for_worktree(res: &SrcResolved) -> Vec<(String, String)> {
-    let mut env = Vec::new();
-
-    // local_repo_rel defaults to hostdir/binpkgs -> hostdir is parent
+pub fn build_env_for_worktree(res: &SrcResolved) -> Vec<(String, String)> {
     let hostdir = res
         .voidpkgs
         .join(&res.local_repo_rel)
@@ -229,32 +196,24 @@ fn build_env_for_worktree(res: &SrcResolved) -> Vec<(String, String)> {
         .map(Path::to_path_buf)
         .unwrap_or_else(|| res.voidpkgs.join("hostdir"));
 
-    env.push((
-        "XBPS_HOSTDIR".to_string(),
-        hostdir.to_string_lossy().to_string(),
-    ));
-
-    // Share distfiles to avoid re-downloading in the worktree
-    let dist = res.voidpkgs.join("distfiles");
-    env.push((
-        "XBPS_DISTDIR".to_string(),
-        dist.to_string_lossy().to_string(),
-    ));
-
-    env
+    vec![
+        (
+            "XBPS_HOSTDIR".to_string(),
+            hostdir.to_string_lossy().to_string(),
+        ),
+        (
+            "XBPS_DISTDIR".to_string(),
+            res.voidpkgs.join("distfiles").to_string_lossy().to_string(),
+        ),
+    ]
 }
 
-fn build_env_for_local(_res: &SrcResolved) -> Vec<(String, String)> {
-    Vec::new()
-}
-
-/// Overlay local `srcpkgs/<pkg>` directories into an upstream worktree.
+/// Overlay local `srcpkgs/<pkg>` into an upstream worktree.
 ///
-/// Rules:
-/// - If upstream has srcpkgs/<pkg>/template, we DO NOT overlay by default (prevents stale fork copies).
-/// - If upstream is missing it, we overlay (fork-only packages).
-/// - If local contains `srcpkgs/<pkg>/.vx-overlay`, we overlay even if upstream has it (explicit override).
-fn overlay_local_srcpkgs(
+/// Only overlays when:
+/// - upstream doesn't have the package (fork-only), OR
+/// - local has a `.vx-overlay` marker file (explicit override).
+pub fn overlay_local_srcpkgs(
     log: &Log,
     local_repo: &Path,
     worktree: &Path,
@@ -274,12 +233,7 @@ fn overlay_local_srcpkgs(
         let marker = local_dir.join(".vx-overlay");
         let upstream_has = git::upstream_has_template(local_repo, pkg);
 
-        // Overlay decision
-        let do_overlay = if marker.is_file() {
-            true
-        } else {
-            !upstream_has
-        };
+        let do_overlay = marker.is_file() || !upstream_has;
 
         if !do_overlay {
             continue;
@@ -293,11 +247,7 @@ fn overlay_local_srcpkgs(
         }
 
         if log.verbose && !log.quiet {
-            let why = if marker.is_file() {
-                "marker .vx-overlay"
-            } else {
-                "fork-only (missing upstream)"
-            };
+            let why = if marker.is_file() { "marker .vx-overlay" } else { "fork-only" };
             log.exec(format!(
                 "overlay ({why}): {} -> {}",
                 local_dir.display(),
@@ -311,7 +261,6 @@ fn overlay_local_srcpkgs(
     Ok(())
 }
 
-/// Recursively copy a directory.
 fn copy_dir_all(src: &Path, dst: &Path) -> Result<(), String> {
     fs::create_dir_all(dst)
         .map_err(|e| format!("failed to create dir {}: {e}", dst.display()))?;
@@ -321,9 +270,7 @@ fn copy_dir_all(src: &Path, dst: &Path) -> Result<(), String> {
     {
         let entry = entry.map_err(|e| format!("read_dir entry failed: {e}"))?;
         let path = entry.path();
-        let file_name = entry.file_name();
-        let target = dst.join(file_name);
-
+        let target = dst.join(entry.file_name());
         let meta = entry
             .metadata()
             .map_err(|e| format!("failed to stat {}: {e}", path.display()))?;
@@ -332,20 +279,13 @@ fn copy_dir_all(src: &Path, dst: &Path) -> Result<(), String> {
             copy_dir_all(&path, &target)?;
         } else if meta.is_file() {
             fs::copy(&path, &target).map_err(|e| {
-                format!(
-                    "failed to copy {} -> {}: {e}",
-                    path.display(),
-                    target.display()
-                )
+                format!("failed to copy {} -> {}: {e}", path.display(), target.display())
             })?;
             #[cfg(unix)]
             {
                 use std::os::unix::fs::PermissionsExt;
-                let mode = meta.permissions().mode();
-                let _ = fs::set_permissions(&target, fs::Permissions::from_mode(mode));
+                let _ = fs::set_permissions(&target, fs::Permissions::from_mode(meta.permissions().mode()));
             }
-        } else {
-            // ignore symlinks/special files
         }
     }
 

@@ -19,25 +19,33 @@ pub fn dispatch(log: &Log, cli: Cli, cfg: Option<Config>) -> ExitCode {
     match cli.cmd {
         Cmd::Status => status::run_status(log, &cli, cfg.as_ref()),
 
-        Cmd::Search { installed, term } => xbps::search(log, cfg.as_ref(), installed, &term),
+        Cmd::Search { term } => xbps::search(log, cfg.as_ref(), false, &term),
+
         Cmd::Info { pkg } => xbps::info(log, cfg.as_ref(), &pkg),
+
         Cmd::Files { pkg } => xbps::files(log, cfg.as_ref(), &pkg),
-        Cmd::Provides { path } => xbps::provides(log, cfg.as_ref(), &path),
+
+        Cmd::List { term } => xbps::list(log, cfg.as_ref(), term.as_deref()),
+
+        Cmd::Owns { path } => xbps::owns(log, cfg.as_ref(), &path),
 
         Cmd::Add { yes, pkgs } => xbps::add(log, cfg.as_ref(), yes, &pkgs),
-        Cmd::Rm { yes, pkgs } => xbps::rm(log, cfg.as_ref(), yes, &pkgs),
+
+        Cmd::Rm { yes, orphans, pkgs } => xbps::rm(log, cfg.as_ref(), yes, orphans, &pkgs),
 
         Cmd::Up {
             all,
             dry_run,
             force,
             yes,
-            remote,
+            local,
         } => {
-            // vx up (system only)
+            // remote = true unless --local was passed
+            let remote = !local;
+
+            // vx up — system only
             if !all {
                 if dry_run {
-                    // For dry-run, we want a reliable "find updates" result, not TTL-stale output.
                     let sys_plan = match xbps::plan_system_updates_fresh(log, cfg.as_ref()) {
                         Ok(v) => v,
                         Err(e) => {
@@ -47,11 +55,11 @@ pub fn dispatch(log: &Log, cli: Cli, cfg: Option<Config>) -> ExitCode {
                     };
 
                     if sys_plan.is_empty() {
-                        log.info("already up to date.");
+                        log.info("system already up to date.");
                         return ExitCode::SUCCESS;
                     }
 
-                    log.info("system update plan");
+                    println!("system update plan:");
                     for u in sys_plan {
                         println!("  {}  {} → {}", u.name, u.from, u.to);
                     }
@@ -61,15 +69,7 @@ pub fn dispatch(log: &Log, cli: Cli, cfg: Option<Config>) -> ExitCode {
                 return xbps::up_with_yes(log, cfg.as_ref(), yes);
             }
 
-            // vx up -a (system + source)
-            //
-            // IMPORTANT: respect the CLI-provided `remote` value here.
-            // If you want a different default for `vx up -a` vs `vx src up`,
-            // handle that in CLI parsing (default value), not here.
-            let remote_for_src = remote;
-
-            // IMPORTANT: this must reliably "find updates" for system without requiring a prior `vx up`.
-            // So we force a repodata sync before planning.
+            // vx up -a — system + source
             let sys_plan = match xbps::plan_system_updates_fresh(log, cfg.as_ref()) {
                 Ok(v) => v,
                 Err(e) => {
@@ -84,7 +84,7 @@ pub fn dispatch(log: &Log, cli: Cli, cfg: Option<Config>) -> ExitCode {
                 cfg.as_ref(),
                 None,
                 force,
-                remote_for_src,
+                remote,
             ) {
                 Ok(v) => v,
                 Err(e) => {
@@ -97,7 +97,7 @@ pub fn dispatch(log: &Log, cli: Cli, cfg: Option<Config>) -> ExitCode {
 
             if sys_plan.is_empty() && src_plan.is_empty() {
                 if !log.quiet {
-                    println!("vx: already up to date.");
+                    println!("vx: everything up to date.");
                 }
                 return ExitCode::SUCCESS;
             }
@@ -106,14 +106,12 @@ pub fn dispatch(log: &Log, cli: Cli, cfg: Option<Config>) -> ExitCode {
                 return ExitCode::SUCCESS;
             }
 
-            if !yes {
-                if !source::confirm_once("Proceed?") {
-                    log.info("aborted.");
-                    return ExitCode::SUCCESS;
-                }
+            if !yes && !source::confirm_once("Proceed?") {
+                log.info("aborted.");
+                return ExitCode::SUCCESS;
             }
 
-            // Apply system updates first, then source.
+            // System first, then source.
             if !sys_plan.is_empty() {
                 let c = xbps::up_with_yes(log, cfg.as_ref(), true);
                 if c != ExitCode::SUCCESS {
@@ -131,11 +129,10 @@ pub fn dispatch(log: &Log, cli: Cli, cfg: Option<Config>) -> ExitCode {
                 voidpkgs_override,
                 cfg.as_ref(),
                 SrcCmd::Up {
-                    all: false,
                     dry_run: false,
                     force: true,
                     yes: true,
-                    remote: remote_for_src,
+                    local: !remote,
                     pkgs: pkgs_to_update,
                 },
             )

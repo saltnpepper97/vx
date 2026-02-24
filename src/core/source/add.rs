@@ -227,7 +227,7 @@ fn is_repo_dir(dir: &Path) -> bool {
 
 /// Choose a repo that *actually contains* an .xbps file for `pkg`.
 ///
-/// This is stricter than “repodata claims it exists”, and avoids:
+/// This is stricter than "repodata claims it exists", and avoids:
 ///   ERROR: <pkg>: failed to checksum: No such file or directory
 fn choose_repo_for_pkg(repos: &[PathBuf], pkg: &str) -> Option<PathBuf> {
     // Prefer repos where the actual .xbps file exists.

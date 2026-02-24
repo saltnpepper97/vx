@@ -213,4 +213,3 @@ fn resolve_voidpkgs_path(
             .to_string(),
     )
 }
-

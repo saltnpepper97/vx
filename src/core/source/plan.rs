@@ -18,7 +18,11 @@ pub struct SrcUpdate {
     pub candidate: String,
 }
 
-/// Used by core/mod.rs for `vx up --all` summary.
+/// Plan which source packages need updating.
+///
+/// - remote=true (default): reads versions from upstream/master via git.
+/// - remote=false: reads versions from local templates.
+/// - pkgs_override: if None, loads all managed packages.
 pub fn plan_src_updates(
     log: &Log,
     voidpkgs_override: Option<PathBuf>,
@@ -29,15 +33,14 @@ pub fn plan_src_updates(
 ) -> Result<Vec<SrcUpdate>, String> {
     let resolved = resolve_voidpkgs(voidpkgs_override, cfg)?;
 
-    // Only need upstream refs for remote planning.
+    // Fetch upstream refs if needed for remote planning (TTL-cached).
     if remote {
         git::sync_voidpkgs(log, &resolved.voidpkgs)?;
     }
 
-    let target = if let Some(pkgs) = pkgs_override {
-        pkgs
-    } else {
-        managed::load_managed()?
+    let target = match pkgs_override {
+        Some(pkgs) => pkgs,
+        None => managed::load_managed()?,
     };
 
     if target.is_empty() {
@@ -54,7 +57,6 @@ pub fn plan_src_updates_with_resolved(
     force: bool,
     remote: bool,
 ) -> Result<Vec<SrcUpdate>, String> {
-    // One-shot installed map (speed win)
     let installed_map = load_installed_pkgver_map().unwrap_or_else(|e| {
         log.warn(format!("failed to load installed package list: {e}"));
         HashMap::new()
@@ -63,16 +65,10 @@ pub fn plan_src_updates_with_resolved(
     let mut out = Vec::new();
 
     for name in pkgs {
-        let local_tpl = res
-            .voidpkgs
-            .join("srcpkgs")
-            .join(name)
-            .join("template");
+        let local_tpl = res.voidpkgs.join("srcpkgs").join(name).join("template");
 
         let (ver, rev) = if remote {
-            // Remote mode:
-            // - Prefer upstream template
-            // - If upstream missing (fork-only pkg), fall back to local silently (if exists)
+            // Remote: prefer upstream template, fall back to local for fork-only packages.
             match git::read_template_upstream(&res.voidpkgs, name) {
                 Ok(text) => match parse_template_version_revision_str(&text) {
                     Ok(v) => v,
@@ -82,8 +78,6 @@ pub fn plan_src_updates_with_resolved(
                     }
                 },
                 Err(_) => {
-                    // Upstream doesn't have it (or cannot read it). If local exists, use it
-                    // without warning (common for fork-only packages like stasis-git).
                     if local_tpl.is_file() {
                         match parse_template_version_revision_file(&local_tpl) {
                             Ok(v) => v,
@@ -102,13 +96,11 @@ pub fn plan_src_updates_with_resolved(
                 }
             }
         } else {
-            // Local mode: ONLY local template.
+            // Local: read from checkout.
             match parse_template_version_revision_file(&local_tpl) {
                 Ok(v) => v,
                 Err(e) => {
-                    log.warn(format!(
-                        "{name}: {e} (local planning; update your checkout or use --remote)"
-                    ));
+                    log.warn(format!("{name}: {e}"));
                     continue;
                 }
             }
@@ -135,8 +127,6 @@ pub fn plan_src_updates_with_resolved(
     Ok(out)
 }
 
-/// Build a HashMap of installed package name -> pkgver.
-/// Avoids N spawns of `xbps-query -p pkgver ...`.
 fn load_installed_pkgver_map() -> Result<HashMap<String, String>, String> {
     let out = Command::new("xbps-query")
         .arg("-l")
@@ -153,31 +143,22 @@ fn load_installed_pkgver_map() -> Result<HashMap<String, String>, String> {
     let text = String::from_utf8_lossy(&out.stdout);
     let mut map: HashMap<String, String> = HashMap::new();
 
-    // Example:
-    // ii  firefox-147.0_1  Mozilla Firefox Web Browser
     for line in text.lines() {
         let line = line.trim();
         if line.is_empty() {
             continue;
         }
-
         let mut it = line.split_whitespace();
-        let status = it.next().unwrap_or("");
-        if status != "ii" {
+        if it.next().unwrap_or("") != "ii" {
             continue;
         }
-
         let pkgver = match it.next() {
             Some(v) => v,
             None => continue,
         };
-
-        let name = match pkgname_from_pkgver(pkgver) {
-            Some(n) => n,
-            None => continue,
-        };
-
-        map.insert(name, pkgver.to_string());
+        if let Some(name) = pkgname_from_pkgver(pkgver) {
+            map.insert(name, pkgver.to_string());
+        }
     }
 
     Ok(map)

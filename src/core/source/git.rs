@@ -35,9 +35,8 @@ fn stable_hash(s: &str) -> String {
 
 /// Fetch upstream refs without modifying the current branch/working tree.
 ///
-/// - Uses TTL caching (default 10m). Set VX_FRESH=1 to force.
-/// - Does NOT merge/rebase your branch.
-/// - Safe even if repo is dirty.
+/// - TTL-cached (default 10m). Set VX_FRESH=1 to bypass.
+/// - Does NOT merge/rebase your branch — your checkout is untouched.
 pub fn sync_voidpkgs(log: &Log, voidpkgs: &Path) -> Result<(), String> {
     let ttl = cache::sync_ttl_secs();
     let cache_key = format!("voidpkgs.fetch:{}", voidpkgs.display());
@@ -74,10 +73,9 @@ pub fn sync_voidpkgs(log: &Log, voidpkgs: &Path) -> Result<(), String> {
         return Err(format!(
             "void-packages repo has no 'upstream' remote.\n\
              vx expects 'upstream' to point at the official Void Linux repository.\n\n\
-             To fix this, run:\n\
+             Fix:\n\
                cd {}\n\
-               git remote add upstream https://github.com/void-linux/void-packages.git\n\n\
-             Then re-run your vx command.",
+               git remote add upstream https://github.com/void-linux/void-packages.git",
             voidpkgs.display()
         ));
     }
@@ -118,16 +116,12 @@ pub fn sync_voidpkgs(log: &Log, voidpkgs: &Path) -> Result<(), String> {
 }
 
 /// Check if upstream/master contains srcpkgs/<pkg>/template.
-///
-/// Used so remote builds only overlay fork-only packages by default.
 pub fn upstream_has_template(voidpkgs: &Path, pkg: &str) -> bool {
     let pkg = pkg.trim();
     if pkg.is_empty() {
         return false;
     }
-
     let spec = format!("{UPSTREAM_REF}:srcpkgs/{pkg}/template");
-
     Command::new("git")
         .current_dir(voidpkgs)
         .args(["cat-file", "-e", &spec])
@@ -141,8 +135,7 @@ pub fn upstream_has_template(voidpkgs: &Path, pkg: &str) -> bool {
 
 /// Read an upstream template without checking anything out.
 ///
-/// Equivalent to:
-///   git show upstream/master:srcpkgs/<pkg>/template
+/// Equivalent to: git show upstream/master:srcpkgs/<pkg>/template
 pub fn read_template_upstream(voidpkgs: &Path, pkg: &str) -> Result<String, String> {
     let pkg = pkg.trim();
     if pkg.is_empty() {
@@ -162,24 +155,22 @@ pub fn read_template_upstream(voidpkgs: &Path, pkg: &str) -> Result<String, Stri
 
     if !out.status.success() {
         let err = String::from_utf8_lossy(&out.stderr).trim().to_string();
-        if err.is_empty() {
-            return Err(format!("git show failed for {spec}"));
-        }
-        return Err(err);
+        return Err(if err.is_empty() {
+            format!("git show failed for {spec}")
+        } else {
+            err
+        });
     }
 
     Ok(String::from_utf8_lossy(&out.stdout).to_string())
 }
 
-/// Ensure we have a reusable worktree checked out at upstream/master, and return its path.
+/// Ensure a reusable worktree is checked out at upstream/master and return its path.
 ///
-/// Behavior:
-/// - Worktree lives in ~/.cache/vx/worktrees/<hash>/upstream-master
-/// - If missing, we `git worktree add --detach` it.
-/// - Each call then hard-resets it to upstream/master and cleans untracked files.
-/// - This lets us build upstream templates without touching your current branch.
+/// - Lives in ~/.cache/vx/worktrees/<hash>/upstream-master.
+/// - Creates it via `git worktree add --detach` if missing.
+/// - Hard-resets and cleans on each call so it's always at upstream/master.
 pub fn ensure_upstream_worktree(log: &Log, voidpkgs: &Path) -> Result<PathBuf, String> {
-    // Ensure upstream ref is current (cached fetch)
     sync_voidpkgs(log, voidpkgs)?;
 
     let root = worktree_root_dir();
@@ -192,7 +183,6 @@ pub fn ensure_upstream_worktree(log: &Log, voidpkgs: &Path) -> Result<PathBuf, S
 
     let wt = repo_bucket.join("upstream-master");
 
-    // If it doesn't exist, add it.
     if !wt.exists() {
         if log.verbose && !log.quiet {
             log.exec(format!(
@@ -203,7 +193,7 @@ pub fn ensure_upstream_worktree(log: &Log, voidpkgs: &Path) -> Result<PathBuf, S
             ));
         }
 
-        let out = Command::new("git")
+        let status = Command::new("git")
             .current_dir(voidpkgs)
             .args([
                 "worktree",
@@ -213,51 +203,36 @@ pub fn ensure_upstream_worktree(log: &Log, voidpkgs: &Path) -> Result<PathBuf, S
                 UPSTREAM_REF,
             ])
             .stdin(Stdio::null())
-            .stdout(if log.verbose && !log.quiet {
-                Stdio::inherit()
-            } else {
-                Stdio::null()
-            })
-            .stderr(if log.verbose && !log.quiet {
-                Stdio::inherit()
-            } else {
-                Stdio::null()
-            })
+            .stdout(if log.verbose && !log.quiet { Stdio::inherit() } else { Stdio::null() })
+            .stderr(if log.verbose && !log.quiet { Stdio::inherit() } else { Stdio::null() })
             .status()
             .map_err(|e| format!("failed to run git worktree add: {e}"))?;
 
-        if !out.success() {
+        if !status.success() {
             return Err(format!("git worktree add failed for {}", wt.display()));
         }
     }
 
-    // Reset + clean.
+    // Reset to upstream/master and clean untracked files.
     if log.verbose && !log.quiet {
         log.exec(format!(
-            "(cd {}) && git reset --hard {}",
+            "(cd {}) && git reset --hard {} && git clean -fdx",
             wt.display(),
             UPSTREAM_REF
         ));
     }
 
-    let st = Command::new("git")
+    let reset_ok = Command::new("git")
         .current_dir(&wt)
         .args(["reset", "--hard", UPSTREAM_REF])
         .stdin(Stdio::null())
-        .stdout(if log.verbose && !log.quiet {
-            Stdio::inherit()
-        } else {
-            Stdio::null()
-        })
-        .stderr(if log.verbose && !log.quiet {
-            Stdio::inherit()
-        } else {
-            Stdio::null()
-        })
+        .stdout(if log.verbose && !log.quiet { Stdio::inherit() } else { Stdio::null() })
+        .stderr(if log.verbose && !log.quiet { Stdio::inherit() } else { Stdio::null() })
         .status()
-        .map_err(|e| format!("failed to run git reset in worktree: {e}"))?;
+        .map_err(|e| format!("failed to run git reset in worktree: {e}"))?
+        .success();
 
-    if !st.success() {
+    if !reset_ok {
         return Err(format!(
             "failed to reset worktree to {} at {}",
             UPSTREAM_REF,
@@ -265,28 +240,17 @@ pub fn ensure_upstream_worktree(log: &Log, voidpkgs: &Path) -> Result<PathBuf, S
         ));
     }
 
-    if log.verbose && !log.quiet {
-        log.exec(format!("(cd {}) && git clean -fdx", wt.display()));
-    }
-
-    let st = Command::new("git")
+    let clean_ok = Command::new("git")
         .current_dir(&wt)
         .args(["clean", "-fdx"])
         .stdin(Stdio::null())
-        .stdout(if log.verbose && !log.quiet {
-            Stdio::inherit()
-        } else {
-            Stdio::null()
-        })
-        .stderr(if log.verbose && !log.quiet {
-            Stdio::inherit()
-        } else {
-            Stdio::null()
-        })
+        .stdout(if log.verbose && !log.quiet { Stdio::inherit() } else { Stdio::null() })
+        .stderr(if log.verbose && !log.quiet { Stdio::inherit() } else { Stdio::null() })
         .status()
-        .map_err(|e| format!("failed to run git clean in worktree: {e}"))?;
+        .map_err(|e| format!("failed to run git clean in worktree: {e}"))?
+        .success();
 
-    if !st.success() {
+    if !clean_ok {
         return Err(format!("failed to clean worktree at {}", wt.display()));
     }
 

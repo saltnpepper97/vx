@@ -31,26 +31,25 @@ pub fn files(log: &Log, _cfg: Option<&Config>, pkg: &str) -> ExitCode {
     run_query_cmd(log, "xbps-query", &["-f", pkg])
 }
 
-pub fn provides(log: &Log, _cfg: Option<&Config>, path: &str) -> ExitCode {
+/// `vx owns <path>`
+pub fn owns(log: &Log, _cfg: Option<&Config>, path: &str) -> ExitCode {
     if path.trim().is_empty() {
-        log.error("usage: vx provides <path>");
+        log.error("usage: vx owns <path>");
         return ExitCode::from(2);
     }
     run_query_cmd(log, "xbps-query", &["-o", path])
 }
 
-pub fn is_installed(xbps_query: &str, pkg: &str) -> Result<bool, String> {
-    let status = Command::new(xbps_query)
-        .arg("-p")
-        .arg("pkgver")
-        .arg(pkg)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .map_err(|e| format!("failed to run {xbps_query}: {e}"))?;
-
-    Ok(status.success())
+/// `vx list [term]`
+pub fn list(log: &Log, _cfg: Option<&Config>, term: Option<&str>) -> ExitCode {
+    let mut args: Vec<&str> = vec!["-l"];
+    if let Some(t) = term {
+        let t = t.trim();
+        if !t.is_empty() {
+            args.push(t);
+        }
+    }
+    run_query_cmd(log, "xbps-query", &args)
 }
 
 pub fn installed_pkgver(pkg: &str) -> Result<Option<String>, String> {
@@ -101,4 +100,3 @@ fn run_query_cmd(log: &Log, tool: &str, args: &[&str]) -> ExitCode {
         }
     }
 }
-
