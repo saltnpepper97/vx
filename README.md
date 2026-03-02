@@ -237,5 +237,5 @@ For bug reports, include:
 
 ## License
 
-MIT
+GPLv3
 
