@@ -219,7 +219,7 @@ pub fn dispatch_src(
 
             if updates.is_empty() {
                 if !log.quiet {
-                    println!("vx src: all packages up to date.");
+                    println!("vx: source already up to date.");
                 }
                 return ExitCode::SUCCESS;
             }

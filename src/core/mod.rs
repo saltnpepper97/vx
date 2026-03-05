@@ -136,7 +136,7 @@ pub fn dispatch(log: &Log, cli: Cli, cfg: Option<Config>) -> ExitCode {
                 };
 
                 if sys_plan.is_empty() {
-                    log.info("system already up to date.");
+                    log.info("vx: system already up to date.");
                     return ExitCode::SUCCESS;
                 }
 
@@ -179,7 +179,7 @@ pub fn dispatch(log: &Log, cli: Cli, cfg: Option<Config>) -> ExitCode {
 
             if sys_plan.is_empty() && src_plan.is_empty() {
                 if !log.quiet {
-                    println!("vx: everything up to date.");
+                    println!("vx: system and source already up to date.");
                 }
                 return ExitCode::SUCCESS;
             }
