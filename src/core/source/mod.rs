@@ -8,6 +8,7 @@ use crate::{
     managed,
 };
 use std::{
+    collections::BTreeSet,
     io::{self, Write},
     path::PathBuf,
     process::{Command, ExitCode, Stdio},
@@ -259,7 +260,7 @@ fn cmd_list(log: &Log) -> ExitCode {
 fn cmd_src_rm(log: &Log, _cfg: Option<&Config>, yes: bool, pkgs: &[String]) -> ExitCode {
     // Confirm before removing.
     if !yes {
-        println!("will remove and untrack:");
+        println!("will remove:");
         for p in pkgs {
             println!("  {p}");
         }
@@ -293,14 +294,65 @@ fn cmd_src_rm(log: &Log, _cfg: Option<&Config>, yes: bool, pkgs: &[String]) -> E
         }
     }
 
-    // Untrack from managed list.
-    if let Err(e) = managed::remove_managed(&pkgs.to_vec()) {
+    // Ask before untracking, defaulting to yes.
+    let to_untrack = match tracked_subset(pkgs) {
+        Ok(v) => v,
+        Err(e) => {
+            log.warn(format!("removed packages but failed to load managed list: {e}"));
+            return ExitCode::SUCCESS;
+        }
+    };
+
+    if to_untrack.is_empty() {
+        return ExitCode::SUCCESS;
+    }
+
+    let should_untrack = if yes {
+        true
+    } else {
+        println!("tracked source packages removed:");
+        for p in &to_untrack {
+            println!("  {p}");
+        }
+        confirm_yes_default("Remove them from the vx source list?")
+    };
+
+    if !should_untrack {
+        return ExitCode::SUCCESS;
+    }
+
+    if let Err(e) = managed::remove_managed(&to_untrack) {
         log.warn(format!("removed packages but failed to update managed list: {e}"));
     } else if log.verbose && !log.quiet {
-        log.exec(format!("untracked: {}", pkgs.join(", ")));
+        log.exec(format!("untracked: {}", to_untrack.join(", ")));
     }
 
     ExitCode::SUCCESS
+}
+
+fn tracked_subset(pkgs: &[String]) -> Result<Vec<String>, String> {
+    let managed = managed::load_managed()?;
+    if managed.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let tracked: BTreeSet<&str> = managed.iter().map(String::as_str).collect();
+    let mut out = Vec::new();
+    for p in pkgs {
+        if tracked.contains(p.as_str()) {
+            out.push(p.clone());
+        }
+    }
+    Ok(out)
+}
+
+fn confirm_yes_default(prompt: &str) -> bool {
+    print!("{prompt} [Y/n] ");
+    io::stdout().flush().ok();
+    let mut line = String::new();
+    io::stdin().read_line(&mut line).ok();
+    let t = line.trim().to_ascii_lowercase();
+    t.is_empty() || matches!(t.as_str(), "y" | "yes")
 }
 
 fn cmd_search(

@@ -1,8 +1,12 @@
 // Author Dustin Pilgrim
 // License: MIT
 
-use crate::{config::Config, log::Log};
+use crate::{config::Config, log::Log, managed};
 use std::process::{Command, ExitCode, Stdio};
+use std::{
+    collections::BTreeSet,
+    io::{self, IsTerminal, Write},
+};
 
 pub fn add(log: &Log, _cfg: Option<&Config>, yes: bool, pkgs: &[String]) -> ExitCode {
     if pkgs.is_empty() {
@@ -48,6 +52,8 @@ pub fn rm(
         if code != ExitCode::SUCCESS {
             return code;
         }
+
+        maybe_untrack_managed(log, yes, pkgs);
     }
 
     // 2) Optional orphan cleanup pass
@@ -91,5 +97,67 @@ fn run(log: &Log, mut cmd: Command, label: &str) -> ExitCode {
             log.error(format!("failed to run: {e}"));
             ExitCode::from(1)
         }
+    }
+}
+
+fn maybe_untrack_managed(log: &Log, yes: bool, pkgs: &[String]) {
+    let managed = match managed::load_managed() {
+        Ok(v) => v,
+        Err(e) => {
+            log.warn(format!("failed to load managed src list: {e}"));
+            return;
+        }
+    };
+
+    if managed.is_empty() {
+        return;
+    }
+
+    let tracked: BTreeSet<&str> = managed.iter().map(String::as_str).collect();
+    let mut to_untrack: Vec<String> = Vec::new();
+    for p in pkgs {
+        if tracked.contains(p.as_str()) {
+            to_untrack.push(p.clone());
+        }
+    }
+
+    if to_untrack.is_empty() {
+        return;
+    }
+
+    let should_untrack = if yes {
+        true
+    } else if io::stdin().is_terminal() && io::stdout().is_terminal() {
+        println!("tracked source packages being removed:");
+        for p in &to_untrack {
+            println!("  {p}");
+        }
+        confirm_yes_default("Also remove them from the vx source list?")
+    } else {
+        true
+    };
+
+    if !should_untrack {
+        return;
+    }
+
+    if let Err(e) = managed::remove_managed(&to_untrack) {
+        log.warn(format!(
+            "removed packages but failed to update managed list: {e}"
+        ));
+    } else if log.verbose && !log.quiet {
+        log.exec(format!("untracked: {}", to_untrack.join(", ")));
+    }
+}
+
+fn confirm_yes_default(prompt: &str) -> bool {
+    print!("{prompt} [Y/n] ");
+    let _ = io::stdout().flush();
+    let mut s = String::new();
+    if io::stdin().read_line(&mut s).is_ok() {
+        let t = s.trim().to_lowercase();
+        t.is_empty() || matches!(t.as_str(), "y" | "yes")
+    } else {
+        false
     }
 }
