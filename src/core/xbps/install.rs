@@ -1,7 +1,12 @@
 // Author Dustin Pilgrim
 // License: MIT
 
-use crate::{config::Config, log::Log, managed};
+use crate::{
+    config::Config,
+    core::xbps::RmOptions,
+    log::Log,
+    managed,
+};
 use std::process::{Command, ExitCode, Stdio};
 use std::{
     collections::BTreeSet,
@@ -25,14 +30,8 @@ pub fn add(log: &Log, _cfg: Option<&Config>, yes: bool, pkgs: &[String]) -> Exit
     run(log, cmd, "sudo xbps-install ...")
 }
 
-pub fn rm(
-    log: &Log,
-    _cfg: Option<&Config>,
-    yes: bool,
-    orphans: bool,
-    pkgs: &[String],
-) -> ExitCode {
-    if pkgs.is_empty() && !orphans {
+pub fn rm(log: &Log, _cfg: Option<&Config>, opts: RmOptions, pkgs: &[String]) -> ExitCode {
+    if pkgs.is_empty() && !opts.orphans {
         log.error("usage: vx rm <pkgs...> [--orphans]");
         return ExitCode::from(2);
     }
@@ -41,11 +40,11 @@ pub fn rm(
     if !pkgs.is_empty() {
         let mut cmd = Command::new("sudo");
         cmd.arg("xbps-remove");
-        if yes {
-            cmd.arg("-y");
+        apply_xbps_rm_flags(&mut cmd, &opts);
+        if opts.recursive {
+            cmd.arg("-R");
         }
-        // -R = remove deps that are no longer needed due to this removal (xbps semantics)
-        cmd.arg("-R");
+        cmd.args(&opts.xbps_args);
         cmd.args(pkgs);
 
         let code = run(log, cmd, "sudo xbps-remove ...");
@@ -53,16 +52,15 @@ pub fn rm(
             return code;
         }
 
-        maybe_untrack_managed(log, yes, pkgs);
+        maybe_untrack_managed(log, opts.yes, pkgs);
     }
 
     // 2) Optional orphan cleanup pass
-    if orphans {
+    if opts.orphans {
         let mut cmd = Command::new("sudo");
         cmd.arg("xbps-remove");
-        if yes {
-            cmd.arg("-y");
-        }
+        apply_xbps_rm_flags(&mut cmd, &opts);
+        cmd.args(&opts.xbps_args);
         cmd.arg("-o");
 
         return run(log, cmd, "sudo xbps-remove -o");
@@ -97,6 +95,42 @@ fn run(log: &Log, mut cmd: Command, label: &str) -> ExitCode {
             log.error(format!("failed to run: {e}"));
             ExitCode::from(1)
         }
+    }
+}
+
+fn apply_xbps_rm_flags(cmd: &mut Command, opts: &RmOptions) {
+    if opts.yes {
+        cmd.arg("-y");
+    }
+    if let Some(dir) = &opts.config_dir {
+        cmd.arg("-C");
+        cmd.arg(dir);
+    }
+    if let Some(dir) = &opts.cachedir {
+        cmd.arg("-c");
+        cmd.arg(dir);
+    }
+    if opts.debug {
+        cmd.arg("-d");
+    }
+    if opts.force_revdeps {
+        cmd.arg("-F");
+    }
+    if opts.force {
+        cmd.arg("-f");
+    }
+    if opts.dry_run {
+        cmd.arg("-n");
+    }
+    for _ in 0..opts.clean_cache {
+        cmd.arg("-O");
+    }
+    if let Some(dir) = &opts.rootdir {
+        cmd.arg("-r");
+        cmd.arg(dir);
+    }
+    if opts.xbps_verbose {
+        cmd.arg("-v");
     }
 }
 

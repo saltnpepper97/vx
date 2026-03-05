@@ -1,7 +1,7 @@
 // Author Dustin Pilgrim
 // License: MIT
 
-use clap::{Parser, Subcommand};
+use clap::{ArgAction, Parser, Subcommand};
 use std::path::PathBuf;
 
 #[derive(Parser, Debug)]
@@ -84,12 +84,56 @@ pub enum Cmd {
         #[arg(short = 'y', long, aliases = ["no-confirm", "noconfirm"])]
         yes: bool,
 
+        /// Path to xbps confdir.
+        #[arg(short = 'C', long = "config", value_name = "DIR")]
+        config_dir: Option<PathBuf>,
+
+        /// Path to xbps package cache.
+        #[arg(short = 'c', long, value_name = "DIR")]
+        cachedir: Option<PathBuf>,
+
+        /// Enable xbps debug output.
+        #[arg(short = 'd', long)]
+        debug: bool,
+
+        /// Force removal even with reverse dependencies.
+        #[arg(short = 'F', long = "force-revdeps")]
+        force_revdeps: bool,
+
+        /// Force package files removal.
+        #[arg(short = 'f', long)]
+        force: bool,
+
+        /// Show what would be removed without making changes.
+        #[arg(short = 'n', long = "dry-run")]
+        dry_run: bool,
+
+        /// Clean outdated package cache entries (-O, repeat for stronger cleanup).
+        #[arg(short = 'O', long = "clean-cache", action = ArgAction::Count)]
+        clean_cache: u8,
+
         /// Also remove orphaned dependencies (-o).
         #[arg(short = 'o', long)]
         orphans: bool,
 
+        /// Disable recursive dependency removal (default is recursive).
+        #[arg(long = "no-recursive")]
+        no_recursive: bool,
+
+        /// Full path to rootdir.
+        #[arg(short = 'r', long, value_name = "DIR")]
+        rootdir: Option<PathBuf>,
+
+        /// Enable verbose xbps messages.
+        #[arg(long = "xbps-verbose")]
+        xbps_verbose: bool,
+
         /// Packages to remove.
         pkgs: Vec<String>,
+
+        /// Extra raw xbps-remove args after `--`.
+        #[arg(last = true, allow_hyphen_values = true)]
+        xbps_args: Vec<String>,
     },
 
     /// Update system packages and/or tracked source packages.

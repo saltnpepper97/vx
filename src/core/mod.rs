@@ -31,7 +31,41 @@ pub fn dispatch(log: &Log, cli: Cli, cfg: Option<Config>) -> ExitCode {
 
         Cmd::Add { yes, pkgs } => xbps::add(log, cfg.as_ref(), yes, &pkgs),
 
-        Cmd::Rm { yes, orphans, pkgs } => xbps::rm(log, cfg.as_ref(), yes, orphans, &pkgs),
+        Cmd::Rm {
+            yes,
+            config_dir,
+            cachedir,
+            debug,
+            force_revdeps,
+            force,
+            dry_run,
+            clean_cache,
+            orphans,
+            no_recursive,
+            rootdir,
+            xbps_verbose,
+            xbps_args,
+            pkgs,
+        } => xbps::rm(
+            log,
+            cfg.as_ref(),
+            xbps::RmOptions {
+                yes,
+                config_dir,
+                cachedir,
+                debug,
+                force_revdeps,
+                force,
+                dry_run,
+                clean_cache,
+                orphans,
+                recursive: !no_recursive,
+                rootdir,
+                xbps_verbose,
+                xbps_args,
+            },
+            &pkgs,
+        ),
 
         Cmd::Up {
             all,
