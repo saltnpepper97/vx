@@ -108,7 +108,7 @@ pub fn dispatch_src(
             xbps_src_args,
         } => {
             if pkgs.is_empty() {
-                log.error("usage: vx src build <pkg> [pkg...]");
+                log.warn("usage: vx src build <pkg> [pkg...]");
                 return ExitCode::from(2);
             }
             let run_opts = to_src_run_options(&build, &xbps_src_args);
@@ -144,7 +144,7 @@ pub fn dispatch_src(
 
         SrcCmd::Clean { pkgs } => {
             if pkgs.is_empty() {
-                log.error("usage: vx src clean <pkg> [pkg...]");
+                log.warn("usage: vx src clean <pkg> [pkg...]");
                 return ExitCode::from(2);
             }
             xbps_src::clean(log, &resolved, &pkgs)
@@ -152,7 +152,7 @@ pub fn dispatch_src(
 
         SrcCmd::Lint { pkgs } => {
             if pkgs.is_empty() {
-                log.error("usage: vx src lint <pkg> [pkg...]");
+                log.warn("usage: vx src lint <pkg> [pkg...]");
                 return ExitCode::from(2);
             }
             xbps_src::lint(log, &resolved, &pkgs)
@@ -166,7 +166,7 @@ pub fn dispatch_src(
             xbps_src_args,
         } => {
             if pkgs.is_empty() {
-                log.error("usage: vx src add <pkg> [pkg...]");
+                log.warn("usage: vx src add <pkg> [pkg...]");
                 return ExitCode::from(2);
             }
             let run_opts = to_src_run_options(&build, &xbps_src_args);
@@ -176,7 +176,7 @@ pub fn dispatch_src(
 
         SrcCmd::Rm { yes, pkgs } => {
             if pkgs.is_empty() {
-                log.error("usage: vx src rm <pkg> [pkg...]");
+                log.warn("usage: vx src rm <pkg> [pkg...]");
                 return ExitCode::from(2);
             }
             cmd_src_rm(log, cfg, yes, &pkgs)

@@ -127,20 +127,20 @@ pub fn dispatch(log: &Log, cli: Cli, cfg: Option<Config>) -> ExitCode {
 
             // vx up — system only
             if !all {
-                if dry_run {
-                    let sys_plan = match xbps::plan_system_updates_fresh(log, cfg.as_ref()) {
-                        Ok(v) => v,
-                        Err(e) => {
-                            log.error(e);
-                            return ExitCode::from(1);
-                        }
-                    };
-
-                    if sys_plan.is_empty() {
-                        log.info("system already up to date.");
-                        return ExitCode::SUCCESS;
+                let sys_plan = match xbps::plan_system_updates_fresh(log, cfg.as_ref()) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        log.error(e);
+                        return ExitCode::from(1);
                     }
+                };
 
+                if sys_plan.is_empty() {
+                    log.info("system already up to date.");
+                    return ExitCode::SUCCESS;
+                }
+
+                if dry_run {
                     println!("system update plan:");
                     for u in sys_plan {
                         println!("  {}  {} → {}", u.name, u.from, u.to);
