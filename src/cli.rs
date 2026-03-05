@@ -74,8 +74,84 @@ pub enum Cmd {
         #[arg(short = 'y', long, aliases = ["no-confirm", "noconfirm"])]
         yes: bool,
 
+        /// Automatic installation mode.
+        #[arg(short = 'A', long = "automatic")]
+        automatic: bool,
+
+        /// Path to xbps confdir.
+        #[arg(short = 'C', long = "config", value_name = "DIR")]
+        config_dir: Option<PathBuf>,
+
+        /// Path to xbps package cache.
+        #[arg(short = 'c', long, value_name = "DIR")]
+        cachedir: Option<PathBuf>,
+
+        /// Enable xbps debug output.
+        #[arg(short = 'd', long)]
+        debug: bool,
+
+        /// Download packages only.
+        #[arg(short = 'D', long = "download-only")]
+        download_only: bool,
+
+        /// Force reinstallation (repeat for stronger force).
+        #[arg(short = 'f', long, action = ArgAction::Count)]
+        force: u8,
+
+        /// Ignore repositories defined in xbps.d.
+        #[arg(short = 'i', long = "ignore-conf-repos")]
+        ignore_conf_repos: bool,
+
+        /// Ignore detected file conflicts.
+        #[arg(short = 'I', long = "ignore-file-conflicts")]
+        ignore_file_conflicts: bool,
+
+        /// Unpack only; do not configure.
+        #[arg(short = 'U', long = "unpack-only")]
+        unpack_only: bool,
+
+        /// Keep repository metadata in memory.
+        #[arg(short = 'M', long = "memory-sync")]
+        memory_sync: bool,
+
+        /// Show what would be done without making changes.
+        #[arg(short = 'n', long = "dry-run")]
+        dry_run: bool,
+
+        /// Additional repositories (can be repeated).
+        #[arg(short = 'R', long = "repository", value_name = "URL")]
+        repositories: Vec<String>,
+
+        /// Full path to rootdir.
+        #[arg(short = 'r', long, value_name = "DIR")]
+        rootdir: Option<PathBuf>,
+
+        /// Enable reproducible mode in pkgdb.
+        #[arg(long = "reproducible")]
+        reproducible: bool,
+
+        /// Enable staged packages.
+        #[arg(long = "staging")]
+        staging: bool,
+
+        /// Disable repository index sync (default is sync).
+        #[arg(long = "no-sync")]
+        no_sync: bool,
+
+        /// Enable package update mode.
+        #[arg(short = 'u', long = "update")]
+        update: bool,
+
+        /// Enable verbose xbps messages.
+        #[arg(long = "xbps-verbose")]
+        xbps_verbose: bool,
+
         /// Packages to install.
         pkgs: Vec<String>,
+
+        /// Extra raw xbps-install args after `--`.
+        #[arg(last = true, allow_hyphen_values = true)]
+        xbps_args: Vec<String>,
     },
 
     /// Remove packages (xbps-remove).

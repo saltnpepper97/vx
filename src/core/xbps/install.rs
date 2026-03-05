@@ -3,7 +3,7 @@
 
 use crate::{
     config::Config,
-    core::xbps::RmOptions,
+    core::xbps::{AddOptions, RmOptions},
     log::Log,
     managed,
 };
@@ -13,7 +13,7 @@ use std::{
     io::{self, IsTerminal, Write},
 };
 
-pub fn add(log: &Log, _cfg: Option<&Config>, yes: bool, pkgs: &[String]) -> ExitCode {
+pub fn add(log: &Log, _cfg: Option<&Config>, opts: AddOptions, pkgs: &[String]) -> ExitCode {
     if pkgs.is_empty() {
         log.error("usage: vx add <pkgs...>");
         return ExitCode::from(2);
@@ -21,10 +21,8 @@ pub fn add(log: &Log, _cfg: Option<&Config>, yes: bool, pkgs: &[String]) -> Exit
 
     let mut cmd = Command::new("sudo");
     cmd.arg("xbps-install");
-    if yes {
-        cmd.arg("-y");
-    }
-    cmd.arg("-S");
+    apply_xbps_install_flags(&mut cmd, &opts);
+    cmd.args(&opts.xbps_args);
     cmd.args(pkgs);
 
     run(log, cmd, "sudo xbps-install ...")
@@ -95,6 +93,70 @@ fn run(log: &Log, mut cmd: Command, label: &str) -> ExitCode {
             log.error(format!("failed to run: {e}"));
             ExitCode::from(1)
         }
+    }
+}
+
+fn apply_xbps_install_flags(cmd: &mut Command, opts: &AddOptions) {
+    if opts.yes {
+        cmd.arg("-y");
+    }
+    if opts.automatic {
+        cmd.arg("-A");
+    }
+    if let Some(dir) = &opts.config_dir {
+        cmd.arg("-C");
+        cmd.arg(dir);
+    }
+    if let Some(dir) = &opts.cachedir {
+        cmd.arg("-c");
+        cmd.arg(dir);
+    }
+    if opts.debug {
+        cmd.arg("-d");
+    }
+    if opts.download_only {
+        cmd.arg("-D");
+    }
+    for _ in 0..opts.force {
+        cmd.arg("-f");
+    }
+    if opts.ignore_conf_repos {
+        cmd.arg("-i");
+    }
+    if opts.ignore_file_conflicts {
+        cmd.arg("-I");
+    }
+    if opts.unpack_only {
+        cmd.arg("-U");
+    }
+    if opts.memory_sync {
+        cmd.arg("-M");
+    }
+    if opts.dry_run {
+        cmd.arg("-n");
+    }
+    for repo in &opts.repositories {
+        cmd.arg("-R");
+        cmd.arg(repo);
+    }
+    if let Some(dir) = &opts.rootdir {
+        cmd.arg("-r");
+        cmd.arg(dir);
+    }
+    if opts.reproducible {
+        cmd.arg("--reproducible");
+    }
+    if opts.staging {
+        cmd.arg("--staging");
+    }
+    if opts.sync {
+        cmd.arg("-S");
+    }
+    if opts.update {
+        cmd.arg("-u");
+    }
+    if opts.xbps_verbose {
+        cmd.arg("-v");
     }
 }
 
