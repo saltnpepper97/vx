@@ -5,7 +5,7 @@ use crate::{log::Log, managed};
 use std::{
     ffi::OsString,
     fs,
-    path::Path,
+    path::{Path, PathBuf},
     process::{Command, ExitCode, Stdio},
 };
 
@@ -13,8 +13,35 @@ use super::add;
 use super::git;
 use super::resolve::SrcResolved;
 
-pub fn build(log: &Log, res: &SrcResolved, pkgs: &[String]) -> ExitCode {
-    run_xbps_src(log, &res.voidpkgs, join_args("pkg", pkgs))
+#[derive(Debug, Clone, Default)]
+pub struct SrcRunOptions {
+    pub host: Option<String>,
+    pub target: Option<String>,
+    pub jobs: Option<usize>,
+    pub build_options: Vec<String>,
+    pub check: bool,
+    pub check_long: bool,
+    pub no_remote: bool,
+    pub temp_masterdir: bool,
+    pub hostdir: Option<PathBuf>,
+    pub masterdir: Option<PathBuf>,
+    pub config_name: Option<String>,
+    pub force_stage: bool,
+    pub skip_existing: bool,
+    pub debug_symbols: bool,
+    pub git_revs: bool,
+    pub xbps_src_quiet: bool,
+    pub no_colors: bool,
+    pub ignore_deps: bool,
+    pub internal_nonfatal: bool,
+    pub allow_broken: bool,
+    pub fail_missing_deps: bool,
+    pub strict_warnings: bool,
+    pub passthrough: Vec<String>,
+}
+
+pub fn build(log: &Log, res: &SrcResolved, pkgs: &[String], opts: &SrcRunOptions) -> ExitCode {
+    run_xbps_src(log, &res.voidpkgs, join_args_with_opts("pkg", pkgs, opts))
 }
 
 pub fn clean(log: &Log, res: &SrcResolved, pkgs: &[String]) -> ExitCode {
@@ -30,7 +57,14 @@ pub fn lint(log: &Log, res: &SrcResolved, pkgs: &[String]) -> ExitCode {
 /// - remote=true (default): builds from upstream/master via git worktree.
 ///   Does not touch your local branch.
 /// - remote=false (--local): builds from your local void-packages checkout.
-pub fn src_up(log: &Log, res: &SrcResolved, yes: bool, remote: bool, pkgs: &[String]) -> ExitCode {
+pub fn src_up(
+    log: &Log,
+    res: &SrcResolved,
+    yes: bool,
+    remote: bool,
+    pkgs: &[String],
+    opts: &SrcRunOptions,
+) -> ExitCode {
     if pkgs.is_empty() {
         log.error("no packages specified");
         return ExitCode::from(2);
@@ -63,12 +97,12 @@ pub fn src_up(log: &Log, res: &SrcResolved, yes: bool, remote: bool, pkgs: &[Str
         (res.voidpkgs.clone(), Vec::new())
     };
 
-    let c = run_xbps_src_with_env(log, &dir, join_args("clean", pkgs), &env);
+    let c = run_xbps_src_with_env(log, &dir, join_args_with_opts("clean", pkgs, opts), &env);
     if c != ExitCode::SUCCESS {
         return c;
     }
 
-    let c = run_xbps_src_with_env(log, &dir, join_args("pkg", pkgs), &env);
+    let c = run_xbps_src_with_env(log, &dir, join_args_with_opts("pkg", pkgs, opts), &env);
     if c != ExitCode::SUCCESS {
         return c;
     }
@@ -86,6 +120,89 @@ pub fn src_up(log: &Log, res: &SrcResolved, yes: bool, remote: bool, pkgs: &[Str
 
 pub fn join_args(sub: &str, pkgs: &[String]) -> Vec<OsString> {
     let mut out = Vec::with_capacity(1 + pkgs.len());
+    out.push(OsString::from(sub));
+    out.extend(pkgs.iter().cloned().map(OsString::from));
+    out
+}
+
+pub fn join_args_with_opts(sub: &str, pkgs: &[String], opts: &SrcRunOptions) -> Vec<OsString> {
+    let mut out: Vec<OsString> = Vec::new();
+
+    if opts.fail_missing_deps {
+        out.push("-1".into());
+    }
+    if let Some(v) = &opts.host {
+        out.push("-A".into());
+        out.push(v.into());
+    }
+    if let Some(v) = &opts.target {
+        out.push("-a".into());
+        out.push(v.into());
+    }
+    if opts.allow_broken {
+        out.push("-b".into());
+    }
+    if let Some(v) = &opts.config_name {
+        out.push("-c".into());
+        out.push(v.into());
+    }
+    if opts.force_stage {
+        out.push("-f".into());
+    }
+    if opts.skip_existing {
+        out.push("-E".into());
+    }
+    if opts.git_revs {
+        out.push("-G".into());
+    }
+    if opts.debug_symbols {
+        out.push("-g".into());
+    }
+    if let Some(v) = &opts.hostdir {
+        out.push("-H".into());
+        out.push(v.as_os_str().to_os_string());
+    }
+    if opts.ignore_deps {
+        out.push("-I".into());
+    }
+    if opts.internal_nonfatal {
+        out.push("-i".into());
+    }
+    if let Some(v) = opts.jobs {
+        out.push("-j".into());
+        out.push(v.to_string().into());
+    }
+    if opts.no_colors {
+        out.push("-L".into());
+    }
+    if let Some(v) = &opts.masterdir {
+        out.push("-m".into());
+        out.push(v.as_os_str().to_os_string());
+    }
+    if opts.no_remote {
+        out.push("-N".into());
+    }
+    for v in &opts.build_options {
+        out.push("-o".into());
+        out.push(v.into());
+    }
+    if opts.check {
+        out.push("-Q".into());
+    }
+    if opts.check_long {
+        out.push("-K".into());
+    }
+    if opts.strict_warnings {
+        out.push("-s".into());
+    }
+    if opts.temp_masterdir {
+        out.push("-t".into());
+    }
+    if opts.xbps_src_quiet {
+        out.push("-q".into());
+    }
+
+    out.extend(opts.passthrough.iter().map(OsString::from));
     out.push(OsString::from(sub));
     out.extend(pkgs.iter().cloned().map(OsString::from));
     out
@@ -290,4 +407,95 @@ fn copy_dir_all(src: &Path, dst: &Path) -> Result<(), String> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{SrcRunOptions, join_args_with_opts};
+    use std::{ffi::OsString, path::PathBuf};
+
+    fn s(args: Vec<OsString>) -> Vec<String> {
+        args.into_iter()
+            .map(|a| a.to_string_lossy().to_string())
+            .collect()
+    }
+
+    #[test]
+    fn join_args_with_opts_minimal() {
+        let out = s(join_args_with_opts(
+            "pkg",
+            &["ripgrep".to_string()],
+            &SrcRunOptions::default(),
+        ));
+        assert_eq!(out, vec!["pkg", "ripgrep"]);
+    }
+
+    #[test]
+    fn join_args_with_opts_emits_selected_flags_and_passthrough_before_subcommand() {
+        let opts = SrcRunOptions {
+            host: Some("x86_64".to_string()),
+            target: Some("aarch64".to_string()),
+            jobs: Some(16),
+            build_options: vec!["foo,~bar".to_string()],
+            check: true,
+            check_long: true,
+            no_remote: true,
+            temp_masterdir: true,
+            hostdir: Some(PathBuf::from("/host")),
+            masterdir: Some(PathBuf::from("/master")),
+            config_name: Some("ci".to_string()),
+            force_stage: true,
+            skip_existing: true,
+            debug_symbols: true,
+            git_revs: true,
+            xbps_src_quiet: true,
+            no_colors: true,
+            ignore_deps: true,
+            internal_nonfatal: true,
+            allow_broken: true,
+            fail_missing_deps: true,
+            strict_warnings: true,
+            passthrough: vec!["--foo".to_string(), "--bar".to_string()],
+        };
+
+        let out = s(join_args_with_opts("pkg", &["hello".to_string()], &opts));
+        assert_eq!(
+            out,
+            vec![
+                "-1",
+                "-A",
+                "x86_64",
+                "-a",
+                "aarch64",
+                "-b",
+                "-c",
+                "ci",
+                "-f",
+                "-E",
+                "-G",
+                "-g",
+                "-H",
+                "/host",
+                "-I",
+                "-i",
+                "-j",
+                "16",
+                "-L",
+                "-m",
+                "/master",
+                "-N",
+                "-o",
+                "foo,~bar",
+                "-Q",
+                "-K",
+                "-s",
+                "-t",
+                "-q",
+                "--foo",
+                "--bar",
+                "pkg",
+                "hello",
+            ]
+        );
+    }
 }

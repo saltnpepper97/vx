@@ -2,7 +2,7 @@
 // License: MIT
 
 use crate::{
-    cli::{Cli, Cmd, PkgCmd, SrcCmd},
+    cli::{Cli, Cmd, PkgCmd, SrcBuildFlags, SrcCmd},
     config::Config,
     log::Log,
 };
@@ -215,7 +215,9 @@ pub fn dispatch(log: &Log, cli: Cli, cfg: Option<Config>) -> ExitCode {
                     force: true,
                     yes: true,
                     local: !remote,
+                    build: SrcBuildFlags::default(),
                     pkgs: pkgs_to_update,
+                    xbps_src_args: Vec::new(),
                 },
             )
         }

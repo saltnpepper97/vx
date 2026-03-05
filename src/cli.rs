@@ -1,7 +1,7 @@
 // Author Dustin Pilgrim
 // License: MIT
 
-use clap::{ArgAction, Parser, Subcommand};
+use clap::{ArgAction, Args, Parser, Subcommand};
 use std::path::PathBuf;
 
 #[derive(Parser, Debug)]
@@ -288,8 +288,15 @@ pub enum SrcCmd {
         #[arg(long)]
         local: bool,
 
+        #[command(flatten)]
+        build: SrcBuildFlags,
+
         /// Packages to build and install.
         pkgs: Vec<String>,
+
+        /// Extra raw xbps-src args after `--`.
+        #[arg(last = true, allow_hyphen_values = true)]
+        xbps_src_args: Vec<String>,
     },
 
     /// Remove a source-built package and stop tracking it.
@@ -325,8 +332,15 @@ pub enum SrcCmd {
         #[arg(long)]
         local: bool,
 
+        #[command(flatten)]
+        build: SrcBuildFlags,
+
         /// Packages to update (default: all tracked).
         pkgs: Vec<String>,
+
+        /// Extra raw xbps-src args after `--`.
+        #[arg(last = true, allow_hyphen_values = true)]
+        xbps_src_args: Vec<String>,
     },
 
     /// List tracked source packages.
@@ -338,7 +352,14 @@ pub enum SrcCmd {
         #[arg(long)]
         local: bool,
 
+        #[command(flatten)]
+        build: SrcBuildFlags,
+
         pkgs: Vec<String>,
+
+        /// Extra raw xbps-src args after `--`.
+        #[arg(last = true, allow_hyphen_values = true)]
+        xbps_src_args: Vec<String>,
     },
 
     /// Clean build files (./xbps-src clean).
@@ -365,4 +386,95 @@ pub enum PkgCmd {
         /// Package name.
         name: String,
     },
+}
+
+#[derive(Args, Debug, Clone, Default)]
+pub struct SrcBuildFlags {
+    /// Build for host architecture.
+    #[arg(short = 'A', long = "host", value_name = "HOST")]
+    pub host: Option<String>,
+
+    /// Cross-compile for target architecture.
+    #[arg(short = 'a', long = "target", value_name = "TARGET")]
+    pub target: Option<String>,
+
+    /// Number of parallel build jobs.
+    #[arg(short = 'j', long = "jobs", value_name = "N")]
+    pub jobs: Option<usize>,
+
+    /// Enable/disable package build options (repeatable).
+    #[arg(short = 'o', long = "build-option", value_name = "OPT[,~OPT2]")]
+    pub build_options: Vec<String>,
+
+    /// Run check stage on target package.
+    #[arg(short = 'Q', long = "check")]
+    pub check: bool,
+
+    /// Run longer check stage (also for built dependencies).
+    #[arg(short = 'K', long = "check-long")]
+    pub check_long: bool,
+
+    /// Disable remote repositories for dependency resolution.
+    #[arg(short = 'N', long = "no-remote")]
+    pub no_remote: bool,
+
+    /// Use temporary overlay masterdir.
+    #[arg(short = 't', long = "temp-masterdir")]
+    pub temp_masterdir: bool,
+
+    /// Absolute path to hostdir.
+    #[arg(short = 'H', long = "hostdir", value_name = "DIR")]
+    pub hostdir: Option<PathBuf>,
+
+    /// Absolute path to masterdir.
+    #[arg(short = 'm', long = "masterdir", value_name = "DIR")]
+    pub masterdir: Option<PathBuf>,
+
+    /// Use etc/conf.<name> as primary config.
+    #[arg(short = 'c', long = "xbps-src-config", value_name = "NAME")]
+    pub config_name: Option<String>,
+
+    /// Force running stage even if already successful.
+    #[arg(long = "xbps-force-stage")]
+    pub force_stage: bool,
+
+    /// Exit if a binary package already exists in repos.
+    #[arg(short = 'E', long = "skip-existing")]
+    pub skip_existing: bool,
+
+    /// Build -dbg packages with debug symbols.
+    #[arg(short = 'g', long = "debug-symbols")]
+    pub debug_symbols: bool,
+
+    /// Enable XBPS_USE_GIT_REVS.
+    #[arg(short = 'G', long = "git-revs")]
+    pub git_revs: bool,
+
+    /// Forward xbps-src quiet mode.
+    #[arg(long = "xbps-src-quiet")]
+    pub xbps_src_quiet: bool,
+
+    /// Disable ASCII colors.
+    #[arg(short = 'L', long = "no-colors")]
+    pub no_colors: bool,
+
+    /// Ignore required dependencies.
+    #[arg(short = 'I', long = "ignore-deps")]
+    pub ignore_deps: bool,
+
+    /// Make xbps-src internal errors non-fatal.
+    #[arg(short = 'i', long = "internal-nonfatal")]
+    pub internal_nonfatal: bool,
+
+    /// Build even if package is marked broken/nocross/excluded.
+    #[arg(short = 'b', long = "allow-broken")]
+    pub allow_broken: bool,
+
+    /// Fail if dependencies are missing instead of building them.
+    #[arg(short = '1', long = "fail-missing-deps")]
+    pub fail_missing_deps: bool,
+
+    /// Treat some warnings as errors.
+    #[arg(short = 's', long = "strict-warnings")]
+    pub strict_warnings: bool,
 }

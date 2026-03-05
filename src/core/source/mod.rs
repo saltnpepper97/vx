@@ -2,7 +2,7 @@
 // License: MIT
 
 use crate::{
-    cli::SrcCmd,
+    cli::{SrcBuildFlags, SrcCmd},
     config::Config,
     log::Log,
     managed,
@@ -101,11 +101,17 @@ pub fn dispatch_src(
     match cmd {
         SrcCmd::List | SrcCmd::Search { .. } => unreachable!(),
 
-        SrcCmd::Build { local, pkgs } => {
+        SrcCmd::Build {
+            local,
+            build,
+            pkgs,
+            xbps_src_args,
+        } => {
             if pkgs.is_empty() {
                 log.error("usage: vx src build <pkg> [pkg...]");
                 return ExitCode::from(2);
             }
+            let run_opts = to_src_run_options(&build, &xbps_src_args);
             let remote = !local;
             if remote {
                 // Build from upstream worktree
@@ -125,9 +131,14 @@ pub fn dispatch_src(
                     log.warn(format!("failed to overlay local srcpkgs: {e}"));
                 }
                 let env = xbps_src::build_env_for_worktree(&resolved);
-                xbps_src::run_xbps_src_with_env(log, &wt, xbps_src::join_args("pkg", &pkgs), &env)
+                xbps_src::run_xbps_src_with_env(
+                    log,
+                    &wt,
+                    xbps_src::join_args_with_opts("pkg", &pkgs, &run_opts),
+                    &env,
+                )
             } else {
-                xbps_src::build(log, &resolved, &pkgs)
+                xbps_src::build(log, &resolved, &pkgs, &run_opts)
             }
         }
 
@@ -147,13 +158,20 @@ pub fn dispatch_src(
             xbps_src::lint(log, &resolved, &pkgs)
         }
 
-        SrcCmd::Add { yes, local, pkgs } => {
+        SrcCmd::Add {
+            yes,
+            local,
+            build,
+            pkgs,
+            xbps_src_args,
+        } => {
             if pkgs.is_empty() {
                 log.error("usage: vx src add <pkg> [pkg...]");
                 return ExitCode::from(2);
             }
+            let run_opts = to_src_run_options(&build, &xbps_src_args);
             let remote = !local;
-            xbps_src::src_up(log, &resolved, yes, remote, &pkgs)
+            xbps_src::src_up(log, &resolved, yes, remote, &pkgs, &run_opts)
         }
 
         SrcCmd::Rm { yes, pkgs } => {
@@ -169,9 +187,12 @@ pub fn dispatch_src(
             force,
             yes,
             local,
+            build,
             pkgs,
+            xbps_src_args,
         } => {
             let remote = !local;
+            let run_opts = to_src_run_options(&build, &xbps_src_args);
 
             // Determine which packages to update.
             let targets: Option<Vec<String>> = if pkgs.is_empty() {
@@ -221,8 +242,36 @@ pub fn dispatch_src(
             }
 
             let pkgs_to_update: Vec<String> = updates.iter().map(|u| u.name.clone()).collect();
-            xbps_src::src_up(log, &resolved, yes, remote, &pkgs_to_update)
+            xbps_src::src_up(log, &resolved, yes, remote, &pkgs_to_update, &run_opts)
         }
+    }
+}
+
+fn to_src_run_options(build: &SrcBuildFlags, passthrough: &[String]) -> xbps_src::SrcRunOptions {
+    xbps_src::SrcRunOptions {
+        host: build.host.clone(),
+        target: build.target.clone(),
+        jobs: build.jobs,
+        build_options: build.build_options.clone(),
+        check: build.check,
+        check_long: build.check_long,
+        no_remote: build.no_remote,
+        temp_masterdir: build.temp_masterdir,
+        hostdir: build.hostdir.clone(),
+        masterdir: build.masterdir.clone(),
+        config_name: build.config_name.clone(),
+        force_stage: build.force_stage,
+        skip_existing: build.skip_existing,
+        debug_symbols: build.debug_symbols,
+        git_revs: build.git_revs,
+        xbps_src_quiet: build.xbps_src_quiet,
+        no_colors: build.no_colors,
+        ignore_deps: build.ignore_deps,
+        internal_nonfatal: build.internal_nonfatal,
+        allow_broken: build.allow_broken,
+        fail_missing_deps: build.fail_missing_deps,
+        strict_warnings: build.strict_warnings,
+        passthrough: passthrough.to_vec(),
     }
 }
 
